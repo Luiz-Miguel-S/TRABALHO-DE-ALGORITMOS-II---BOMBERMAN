@@ -1,0 +1,377 @@
+/**
+    Estrutura inicial para um jogo
+    versão: 0.1 (Prof. Alex,  Adaptado Prof. Felski)
+    Aluno: Luiz Miguel Silvino.
+*/
+#include <iostream>
+#include <windows.h>
+#include <conio.h>
+#include <cstdlib>
+#include <ctime>
+
+using namespace std;
+
+
+int bombaX, bombaY, bombaTimer,fimTimer = 1; //fimTimer COMEÇA EM 1 PARA EVITAR QUE SEJA DISPARADO ANTES DA PRIMEIRA EXPLOSÃO.
+
+bool bombaAtiva = false,bombaExplodiu = false,gameOverColideInimigo = false,gameOverExplosao = false,gameWin = false;
+
+int inimigoX = 1, inimigoY = 1; // CORDENADAS INICIAIS DO INIMIGO
+
+int inimigo2X = 13, inimigo2Y = 1;
+
+int inimigo3X = 1, inimigo3Y = 23;
+
+
+int inimigosVivos = 3; // CONTADOR DE INIMIGOS
+
+
+
+bool posicaoLivre(int x, int y){
+
+    if(x == inimigoX && y == inimigoY) return false;
+    if(x == inimigo2X && y == inimigo2Y) return false;
+    if(x == inimigo3X && y == inimigo3Y) return false;
+    return true;
+
+}
+
+
+void moverInimigo(int &x, int &y, int m[][25]){ // FUNÇÃO PARA MOVIMENTAÇÃO DO INIMIGO
+
+    int dir = rand() % 4; // SORTEIA UMA DIREÇÃO ENTRE 0 e 3
+
+    // VERIFIÇÃO PARA MOVIMENTAÇÃO EM CAMINHO LIVRE "0", EXPLOSÃO "6" E INIMIGOS "X"
+
+    if(dir == 0 && (m[x-1][y] == 0 || m[x-1][y] == 6) && posicaoLivre(x-1, y)) x--;// CIMA
+    if(dir == 1 && (m[x+1][y] == 0 || m[x+1][y] == 6) && posicaoLivre(x+1, y)) x++;// BAIXO
+    if(dir == 2 && (m[x][y-1] == 0 || m[x][y-1] == 6) && posicaoLivre(x, y-1)) y--;// ESQUERDA
+    if(dir == 3 && (m[x][y+1] == 0 || m[x][y+1] == 6) && posicaoLivre(x, y+1)) y++;// DIREITA
+}
+
+
+void bomba(int x, int y, int m [][25]){ //FUNÇÃO PARA CHAMAR A BOMBA
+
+    if(!bombaAtiva && !bombaExplodiu){
+        bombaX = x;
+        bombaY = y; // bombaX E bombaY ESTÃO RECEBENDO A LOCALIZACÃO DO PLAYER PARA DEFINIR ONDE POR A BOMBA.
+        bombaAtiva = true; // ATIVA A BOMBA
+        bombaTimer = 30; //DEFINIÇÃO PARA EXPLODIR A BOMBA EM 1.8 SEGUNDOS.
+        m[bombaX][bombaY] = 5; //ATRIBUIÇÃO DA BOMBA NO MAPA
+        }
+    }
+
+void explosao(int x, int y, int m [][25]){
+
+    m[x][y] = 6;// INSERÇÃO DA BOMBA ONDE ELA ESTÁ LOCALIZADA
+
+    //VERIFICAÇÃO DE CONDIÇÃO PARA EXPLOSÃO.
+
+    if (m[x-1][y]==0 or m[x-1][y]==4){
+
+        m[x-1][y]= 6;
+    }
+
+    if (m[x+1][y]==0 or m[x+1][y]==4){
+
+        m[x+1][y]= 6;
+    }
+
+    if (m[x][y-1]==0 or m[x][y-1]==4){
+
+        m[x][y-1]= 6;
+    }
+
+    if (m[x][y+1]==0 or m[x][y+1]==4){
+
+        m[x][y+1]= 6;
+    }
+
+}
+
+
+void fimExplosao(int x, int y, int m [][25]){
+
+    //VERIFICAÇÃO DE ARÉAS QUE ESTÃO COM EXPLOSÃO.
+
+    if (m[x][y] == 6){
+
+        m[x][y] = 0;
+    }
+
+    if (m[x-1][y]==6){
+
+        m[x-1][y]= 0;
+    }
+
+    if (m[x+1][y]==6){
+
+        m[x+1][y]= 0;
+    }
+
+    if (m[x][y-1]==6){
+
+        m[x][y-1]= 0;
+    }
+
+    if (m[x][y+1]==6){
+
+        m[x][y+1]= 0;
+    }
+
+
+}
+
+void setCor(int cor) {
+    if (cor == 7) {
+        cout << "\x1b[0m";          // reset
+    } else {
+        cout << "\x1b[38;5;" << cor << "m";
+    }
+}
+
+int main()
+{
+    srand(time(0)); // INICIALIZA A SEMENTE PARA GERAR MOVIMENTOS ALEATÓRIOS DIFERENTES A CADA EXECUÇÃO
+    int delayInimigo = 0;
+
+    SetConsoleOutputCP(437);// COMANDO NECESSÁRIO PARA PODER MANIPULAR OS CARACTERES.
+
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD dwMode = 0;
+    GetConsoleMode(hOut, &dwMode);
+    
+
+    ///ALERTA: NAO MODIFICAR O TRECHO DE CODIGO, A SEGUIR.
+        //INICIO: COMANDOS PARA QUE O CURSOR NAO FIQUE PISCANDO NA TELA
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO     cursorInfo;
+        GetConsoleCursorInfo(out, &cursorInfo);
+        cursorInfo.bVisible = false; // set the cursor visibility
+        SetConsoleCursorInfo(out, &cursorInfo);
+        //FIM: COMANDOS PARA QUE O CURSOR NAO FIQUE PISCANDO NA TELA
+        //INICIO: COMANDOS PARA REPOSICIONAR O CURSOR NO INICIO DA TELA
+        short int CX=0, CY=0;
+        COORD coord;
+        coord.X = CX;
+        coord.Y = CY;
+        //FIM: COMANDOS PARA REPOSICIONAR O CURSOR NO INICIO DA TELA
+    ///ALERTA: NAO MODIFICAR O TRECHO DE CODIGO, ACIMA.
+
+    int m[15][25] = {
+            {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+            {1,0,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,0,1},
+            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
+            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
+            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
+            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
+            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
+            {1,4,0,4,0,4,0,4,0,4,0,0,0,4,0,4,0,4,0,4,0,4,0,4,1},
+            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
+            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
+            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
+            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
+            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
+            {1,0,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,0,1},
+            {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+        };
+
+
+
+
+
+
+
+    //POSICAO INICIAL DO PERSONAGEM NO CONSOLE
+    int x=7, y=11;
+
+    //VARIAVEL PARA TECLA PRECIONADA
+    char tecla;
+
+    while(true){
+
+        ///POSICIONA A ESCRITA NO IICIO DO CONSOLE
+        SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
+
+        ///IMPRIME O JOGO: MAPA E PERSONAGEM.
+        for(int i=0;i<15;i++){
+            for(int j=0;j<25;j++){
+                if(i==x && j==y){
+                    setCor(226);
+                    cout<< 'B'; //PERSONAGEM
+                    setCor(7);
+                }
+                else if(i==inimigoX && j==inimigoY){ // EXIBE O INIMIGO NA POSIÇÃO ATUAL
+                    setCor(196);
+                    cout<<'X';
+                    setCor(7);
+                }
+                else if(i==inimigo2X && j==inimigo2Y){
+                    setCor(196);
+                    cout<<'X';
+                    setCor(7);
+                }
+                else if(i==inimigo3X && j==inimigo3Y){
+                    setCor(196);
+                    cout<<'X';
+                    setCor(7);
+                }
+                else {
+                    switch (m[i][j]){
+                        case 0: setCor(7);cout<<" "; break; //CAMINHO
+                        case 1: setCor(94);cout<<char(219); break; // PAREDE
+                        case 4: setCor(172);cout<<char(177); break; // TIJOLO DESTRITUIVEL
+                        case 5: setCor(15);cout<<char(79); break;// BOMBA
+                        case 6: setCor(196);cout<<char('@'); break; // EXPLOSÃO
+
+                    }
+                }
+            }
+            cout<<"\n";
+        } //FIM DA EXIBIÇÃO DO MAPA
+        setCor(15);
+        cout << "\n";
+        cout << "Comandos:" << endl;
+        cout << "W/A/S/D - Mover" << endl;
+        cout << "B       - Bomba" << endl;
+        cout << "F       - Desistir"  << endl;
+        setCor(7);
+        // VERIFICA SE O JOGADOR MORREU PELA EXPLOSÃO
+        if (m[x][y] == 6){
+            gameOverExplosao = true;
+        }
+
+
+        // VERIFICA COLISÃO DIRETA COM O INIMIGO
+        if (x == inimigoX && y == inimigoY){
+            gameOverColideInimigo = true;
+        }
+        if (x == inimigo2X && y == inimigo2Y){
+            gameOverColideInimigo = true;
+        }
+        if (x == inimigo3X && y == inimigo3Y){
+            gameOverColideInimigo = true;
+        }
+
+        // CASO O INIMIGO ESTEJA NA ÁREA DA EXPLOSÃO OU ENCOSTE NA BOMBA, ELE É REMOVIDO DO MAPA
+
+        if (inimigoX != -1 && inimigoY != -1 &&(m[inimigoX][inimigoY] == 6 || m[inimigoX][inimigoY] == 5)){
+                inimigoX = -1;
+                inimigoY = -1;
+                inimigosVivos--;
+        }
+
+        if (inimigo2X != -1 && inimigo2Y != -1 &&(m[inimigo2X][inimigo2Y] == 6 || m[inimigo2X][inimigo2Y] == 5)){
+                inimigo2X = -1;
+                inimigo2Y = -1;
+                inimigosVivos--;
+        }
+
+        if (inimigo3X != -1 && inimigo3Y != -1 &&(m[inimigo3X][inimigo3Y] == 6 || m[inimigo3X][inimigo3Y] == 5)){
+                inimigo3X = -1;
+                inimigo3Y = -1;
+                inimigosVivos--;
+        }
+
+
+
+        if (inimigosVivos == 0){
+            system("cls");
+            setCor(46);
+            cout << "VOCE VENCEU!!" << endl;
+            setCor(7);
+            return 0;
+        }
+
+        // CONDIÇÃO DE DERROTA (ENCERRAR O JOGO)
+
+        if (gameOverColideInimigo){
+            system("cls");
+            setCor(196);
+            cout << "VOCE MORREU ENCOSTANDO NO INIMIGO!" << endl;
+            setCor(7);
+            return 0;
+        }
+         if (gameOverExplosao){
+            system("cls");
+            setCor(196);
+            cout << "VOCE MORREU EXPLODIDO!" << endl;
+            setCor(7);
+            return 0;
+        }
+
+
+        if (bombaAtiva){ // AÇÃO DE EXPLOSÃO
+            bombaTimer --;
+            if (bombaTimer <= 0){
+                m[bombaX][bombaY] = 0;
+                explosao (bombaX, bombaY, m);// CHAMADA DA EXPLOSÃO
+                bombaAtiva= false; // DESARMA A BOMBA
+                fimTimer = 8; //DEFINE 0,5 SEGUNDO PARA LIMPAR A TELA DA EXPLOSÃO
+                bombaExplodiu = true;// ATRIBUIÇÃO NECESSÁRIA PARA NÃO INSERIR OUTRA BOMBA
+            }
+        }
+        if(bombaExplodiu == true){
+            fimTimer --;
+            if(fimTimer <= 0){
+                fimExplosao(bombaX,bombaY,m);
+                bombaExplodiu = false;
+
+            }
+        }
+
+        ///EXECUÇÃO DE MOVIMENTAÇÃO
+
+         if ( _kbhit() ){
+            tecla = getch();
+            switch(tecla)
+            {
+
+                case 'w':
+                    if(m[x-1][y]==0 || m[x-1][y]==6)
+                        x--;
+                break;
+
+                case 's':
+                    if(m[x+1][y]==0 || m[x+1][y]==6)
+                        x++;
+                break;
+
+                case 'a':
+                    if(m[x][y-1]==0 || m[x][y-1]==6)
+                        y--;
+                break;
+
+                case 'd':
+                    if(m[x][y+1]==0 || m[x][y+1]==6)
+                         y++;
+                break;
+
+                case 'b':
+                    bomba(x, y, m);
+                break;
+
+                case 'f':
+                system("cls");
+                setCor(196);
+                cout<<"CORRE MESMO FILHINHO DA MAMAE"<<endl<<endl;
+                setCor(7);
+                return 0;
+                break;
+            }
+         }
+
+
+       delayInimigo++; // MOVIMENTAÇÃO DO INIMIGO A CADA CICLO DO JOGO
+
+         if(delayInimigo >= 5){ // QUANTO MAIOR, MAIS LENTO
+           moverInimigo(inimigoX, inimigoY, m);
+           moverInimigo(inimigo2X, inimigo2Y, m);
+           moverInimigo(inimigo3X, inimigo3Y, m);
+           delayInimigo = 0;
+}
+        Sleep(60);
+    }
+
+    return 0;
+}
