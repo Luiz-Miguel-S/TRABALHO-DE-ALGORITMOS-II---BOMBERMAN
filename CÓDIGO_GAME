@@ -22,8 +22,11 @@ int inimigo2X = 13, inimigo2Y = 1;
 
 int inimigo3X = 1, inimigo3Y = 23;
 
+int pontuacao = 0;
+
 
 int inimigosVivos = 3; // CONTADOR DE INIMIGOS
+int vidas = 3;
 
 
 
@@ -56,7 +59,7 @@ void bomba(int x, int y, int m [][25]){ //FUNÇÃO PARA CHAMAR A BOMBA
         bombaX = x;
         bombaY = y; // bombaX E bombaY ESTÃO RECEBENDO A LOCALIZACÃO DO PLAYER PARA DEFINIR ONDE POR A BOMBA.
         bombaAtiva = true; // ATIVA A BOMBA
-        bombaTimer = 30; //DEFINIÇÃO PARA EXPLODIR A BOMBA EM 1.8 SEGUNDOS.
+        bombaTimer = 7; //DEFINIÇÃO PARA EXPLODIR A BOMBA EM 0.4 SEGUNDOS.
         m[bombaX][bombaY] = 5; //ATRIBUIÇÃO DA BOMBA NO MAPA
         }
     }
@@ -149,7 +152,7 @@ int main()
         GetConsoleCursorInfo(out, &cursorInfo);
         cursorInfo.bVisible = false; // set the cursor visibility
         SetConsoleCursorInfo(out, &cursorInfo);
-        //FIM: COMANDOS PARA QUE O CURSOR NAO FIQUE PISCANDO NA TELA
+        //FIM: COMANDOS PARA QUE O CURSOR NAO FIQUE PISCANDO NA TELA        
         //INICIO: COMANDOS PARA REPOSICIONAR O CURSOR NO INICIO DA TELA
         short int CX=0, CY=0;
         COORD coord;
@@ -175,6 +178,8 @@ int main()
             {1,0,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,0,1},
             {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
         };
+
+        
 
 
 
@@ -231,6 +236,9 @@ int main()
         } //FIM DA EXIBIÇÃO DO MAPA
         setCor(15);
         cout << "\n";
+        cout << "VIDAS: " << vidas << endl;
+        cout << "TEMPO: " << endl;
+        cout << "PONTUACAO: " << pontuacao << endl;
         cout << "Comandos:" << endl;
         cout << "W/A/S/D - Mover" << endl;
         cout << "B       - Bomba" << endl;
@@ -244,13 +252,16 @@ int main()
 
         // VERIFICA COLISÃO DIRETA COM O INIMIGO
         if (x == inimigoX && y == inimigoY){
-            gameOverColideInimigo = true;
+            //gameOverColideInimigo = true;
+            
         }
         if (x == inimigo2X && y == inimigo2Y){
-            gameOverColideInimigo = true;
+           // gameOverColideInimigo = true;
+            
         }
         if (x == inimigo3X && y == inimigo3Y){
             gameOverColideInimigo = true;
+           
         }
 
         // CASO O INIMIGO ESTEJA NA ÁREA DA EXPLOSÃO OU ENCOSTE NA BOMBA, ELE É REMOVIDO DO MAPA
@@ -258,18 +269,21 @@ int main()
         if (inimigoX != -1 && inimigoY != -1 &&(m[inimigoX][inimigoY] == 6 || m[inimigoX][inimigoY] == 5)){
                 inimigoX = -1;
                 inimigoY = -1;
+                pontuacao = pontuacao + 100;
                 inimigosVivos--;
         }
 
         if (inimigo2X != -1 && inimigo2Y != -1 &&(m[inimigo2X][inimigo2Y] == 6 || m[inimigo2X][inimigo2Y] == 5)){
                 inimigo2X = -1;
                 inimigo2Y = -1;
+                pontuacao = pontuacao + 100;
                 inimigosVivos--;
         }
 
         if (inimigo3X != -1 && inimigo3Y != -1 &&(m[inimigo3X][inimigo3Y] == 6 || m[inimigo3X][inimigo3Y] == 5)){
                 inimigo3X = -1;
                 inimigo3Y = -1;
+                pontuacao = pontuacao + 100;
                 inimigosVivos--;
         }
 
@@ -279,6 +293,7 @@ int main()
             system("cls");
             setCor(46);
             cout << "VOCE VENCEU!!" << endl;
+            cout << pontuacao << endl;
             setCor(7);
             return 0;
         }
@@ -289,6 +304,7 @@ int main()
             system("cls");
             setCor(196);
             cout << "VOCE MORREU ENCOSTANDO NO INIMIGO!" << endl;
+            cout << pontuacao << endl;
             setCor(7);
             return 0;
         }
@@ -296,6 +312,7 @@ int main()
             system("cls");
             setCor(196);
             cout << "VOCE MORREU EXPLODIDO!" << endl;
+            cout << pontuacao << endl;
             setCor(7);
             return 0;
         }
