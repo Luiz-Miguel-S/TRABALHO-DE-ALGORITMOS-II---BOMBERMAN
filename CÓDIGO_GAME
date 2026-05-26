@@ -1,9 +1,13 @@
 /**
-    Estrutura inicial para um jogo
-    versão: 0.1 (Prof. Alex,  Adaptado Prof. Felski)
+    Estrutura para o jogo Bomberman
     Aluno: Luiz Miguel Silvino.
+    Versão Final - Código Limpo, Emojis UTF-8 💣🔥👻, Modo AutoPlay e Comentado.
 */
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <cstring>
 #include <windows.h>
 #include <conio.h>
 #include <cstdlib>
@@ -11,384 +15,887 @@
 
 using namespace std;
 
+// =================================================================
+// === VARIAVEIS GLOBAIS DE ESTADO =================================
+// =================================================================
 
-int bombaX, bombaY, bombaTimer,fimTimer = 1; //fimTimer COMEÇA EM 1 PARA EVITAR QUE SEJA DISPARADO ANTES DA PRIMEIRA EXPLOSÃO.
+// Variáveis para controlar o estado da bomba (posição e temporizadores)
+int bombaX, bombaY, bombaTimer, fimTimer = 1;
+bool bombaAtiva = false, bombaExplodiu = false;
 
-bool bombaAtiva = false,bombaExplodiu = false,gameOverColideInimigo = false,gameOverExplosao = false,gameWin = false;
+// Variáveis para controlar o estado de fim de jogo (derrota ou vitória)
+bool gameOverColideInimigo = false, gameOverExplosao = false, gameWin = false;
 
-int inimigoX = 1, inimigoY = 1; // CORDENADAS INICIAIS DO INIMIGO
-
-int inimigo2X = 13, inimigo2Y = 1;
-
-int inimigo3X = 1, inimigo3Y = 23;
-
+// Atributos principais da partida atual
 int pontuacao = 0;
-
-
-int inimigosVivos = 3; // CONTADOR DE INIMIGOS
 int vidas = 3;
+int faseAtual = 1;
+int dificuldade = 1; // 1=FACIL, 2=MEDIO, 3=DIFICIL
+
+// Estatísticas para cálculo de bônus no final da fase
+int bombasUsadas = 0;
+int movimentos = 0;
+int caixasDestruidas = 0;
+time_t tempoInicio = 0;
+string nomeJogador = "Player1";
+
+// Flag que indica se o bot está jogando sozinho (Opção 8 do menu)
+bool modoAutoPlay = false;
+
+// Constantes de estado retornadas pela função executarFase()
+const int ESTADO_VITORIA = 1;
+const int ESTADO_DERROTA = 2;
+const int ESTADO_DESISTIU = 3;
+const int ESTADO_PROXIMA_FASE = 4;
+
+// Nomes dos arquivos de persistência de dados
+const char* ARQUIVO_SAVE = "bomberman_save.dat";
+const char* ARQUIVO_RANK = "bomberman_rank.dat";
 
 
+// =================================================================
+// === STRUCTS =====================================================
+// =================================================================
 
-bool posicaoLivre(int x, int y){
+// Estrutura usada para salvar e carregar o progresso do jogador
+struct JogoSave {
+    char data[32];
+    char jogador[32];
+    int fase;
+    int pontuacao;
+    int bombasUsadas;
+    int movimentos;
+    long tempoSegundos;
+    int vidas;
+    int dificuldade;
+};
 
-    if(x == inimigoX && y == inimigoY) return false;
-    if(x == inimigo2X && y == inimigo2Y) return false;
-    if(x == inimigo3X && y == inimigo3Y) return false;
+// Estrutura para manter o registro de pontuação máxima (Top 10)
+struct RankEntry {
+    char data[32];
+    char jogador[32];
+    int pontuacao;
+    int fase;
+};
+
+// Estrutura base para representar qualquer inimigo no mapa
+struct Inimigo {
+    int x;
+    int y;
+    bool vivo;
+};
+
+// Arrays e variáveis de controle dos inimigos
+Inimigo inimigos[7];        // Capacidade máxima de inimigos normais
+int numInimigosAtivos = 0;  // Quantos inimigos a fase começou
+int inimigosVivos = 0;      // Quantos ainda estão vivos na tela
+
+// O Boss tem uma estrutura própria pois a lógica de movimentação dele é diferente
+Inimigo boss;
+bool bossAtivo = false;
+
+// Variáveis de controle do Portal (condição de vitória da fase)
+int portalX = -1, portalY = -1;
+bool portalAtivo = false;
+
+
+// =================================================================
+// === CRITÉRIOS TÉCNICOS & UTILITÁRIOS ============================
+// =================================================================
+
+// Função para mudar a cor do texto no console
+void setCor(int cor) {
+    if (cor == 7) cout << "\x1b[0m"; // Resetar para a cor padrão do terminal
+    else cout << "\x1b[38;5;" << cor << "m"; // Aplicar código de cor ANSI
+}
+
+// TEMPLATE: Permite imprimir qualquer tipo de dado (string, int) centralizado na tela
+template<typename T>
+void imprimirCentralizado(T conteudo, int largura = 70) {
+    stringstream ss; 
+    ss << conteudo; 
+    string s = ss.str();
+    int pad = (largura - (int)s.size()) / 2;
+    if(pad < 0) pad = 0;
+    for(int i=0; i<pad; i++) cout << " ";
+    cout << s << "\n";
+}
+
+// Desenha a borda superior de uma caixa (usada em menus e HUD)
+void desenharBordaTopo(int largura, int cor) {
+    setCor(cor); cout << "╔";
+    for(int i=0; i<largura-2; i++) cout << "═";
+    cout << "╗\n";
+}
+
+// Desenha a borda inferior de uma caixa
+void desenharBordaBase(int largura, int cor) {
+    setCor(cor); cout << "╚";
+    for(int i=0; i<largura-2; i++) cout << "═";
+    cout << "╝\n";
+}
+
+// SOBRECARGA 1: Desenha uma linha lateral preenchida com texto
+void desenharLinhaLateral(string conteudo, int largura, int cor) {
+    setCor(cor); cout << "║"; setCor(7);
+    string txt = conteudo;
+    if((int)txt.size() > largura-4) txt = txt.substr(0, largura-4);
+    cout << " " << txt;
+    for(int i=(int)txt.size()+1; i<largura-3; i++) cout << " ";
+    setCor(cor); cout << "║\n"; setCor(7);
+}
+
+// SOBRECARGA 2: Desenha uma linha lateral vazia (sem parâmetros de texto)
+void desenharLinhaLateral(int largura, int cor) {
+    desenharLinhaLateral("", largura, cor);
+}
+
+// Captura a data e hora do sistema e formata em uma string
+void obterDataAtual(char* buffer, int tam) {
+    time_t t = time(0); 
+    struct tm* lt = localtime(&t);
+    sprintf(buffer, "%02d/%02d/%04d %02d:%02d",
+        lt->tm_mday, lt->tm_mon+1, lt->tm_year+1900, lt->tm_hour, lt->tm_min);
+}
+
+
+// =================================================================
+// === SAVE, LOAD E RANK ===========================================
+// =================================================================
+
+// Salva o struct montado em um arquivo binário
+void salvarJogo(JogoSave s) {
+    ofstream f(ARQUIVO_SAVE, ios::binary);
+    if(f) { f.write((char*)&s, sizeof(JogoSave)); f.close(); }
+}
+
+// Sobrecarga da função acima que monta o struct pegando as variáveis globais atuais
+void salvarJogo(string player = "Player1") {
+    JogoSave s; 
+    strncpy(s.jogador, player.c_str(), 31); s.jogador[31] = 0;
+    obterDataAtual(s.data, 32); 
+    s.fase = faseAtual; s.pontuacao = pontuacao;
+    s.bombasUsadas = bombasUsadas; s.movimentos = movimentos;
+    s.tempoSegundos = (long)(time(0) - tempoInicio); 
+    s.vidas = vidas; s.dificuldade = dificuldade;
+    salvarJogo(s);
+}
+
+// Lê o arquivo binário e tenta preencher a struct JogoSave passada por referência
+bool lerSave(JogoSave &s) {
+    ifstream f(ARQUIVO_SAVE, ios::binary);
+    if(!f) return false;
+    f.read((char*)&s, sizeof(JogoSave)); 
+    bool ok = (f.gcount() == sizeof(JogoSave)); // Verifica se a leitura foi completa
+    f.close(); return ok;
+}
+
+// Carrega as variáveis globais a partir do arquivo salvo e retoma o tempo corrido
+bool aplicarSave() {
+    JogoSave s; 
+    if(!lerSave(s)) return false;
+    faseAtual = s.fase; pontuacao = s.pontuacao; bombasUsadas = s.bombasUsadas;
+    movimentos = s.movimentos; vidas = s.vidas; dificuldade = s.dificuldade;
+    nomeJogador = s.jogador; tempoInicio = time(0) - s.tempoSegundos; 
     return true;
+}
 
+// RECURSIVIDADE: Insere uma nova pontuação no Rank ordenando-a de forma decrescente
+void inserirRankRecursivo(RankEntry* arr, int &qtd, RankEntry novo, int i = 0) {
+    // Caso base: Chegamos no final do array válido, se tiver espaço, apenas insere
+    if(i >= qtd) { 
+        if(qtd < 10) arr[qtd++] = novo; 
+        return; 
+    }
+    // Se a pontuação nova for maior que a posição atual, troca elas e "empurra" a antiga pra baixo
+    if(novo.pontuacao > arr[i].pontuacao) {
+        RankEntry temp = arr[i]; 
+        arr[i] = novo;
+        if(qtd < 10) inserirRankRecursivo(arr, qtd, temp, i+1);
+        return;
+    }
+    // Caso a pontuação nova seja menor, apenas tenta a próxima posição (i+1)
+    inserirRankRecursivo(arr, qtd, novo, i+1);
+}
+
+// Pega os dados atuais, adiciona no rank e re-salva o arquivo binário
+void registrarNoRank(string player, int pts, int fase) {
+    RankEntry arr[10]; 
+    int qtd = 0; 
+    ifstream fin(ARQUIVO_RANK, ios::binary);
+    if(fin) {
+        while(qtd < 10) {
+            RankEntry r; fin.read((char*)&r, sizeof(RankEntry));
+            if(fin.gcount() != sizeof(RankEntry)) break; 
+            arr[qtd++] = r;
+        }
+        fin.close();
+    }
+    RankEntry novo; 
+    strncpy(novo.jogador, player.c_str(), 31); novo.jogador[31] = 0;
+    obterDataAtual(novo.data, 32); novo.pontuacao = pts; novo.fase = fase;
+    
+    // Chama a função recursiva de ordenação
+    inserirRankRecursivo(arr, qtd, novo);
+    
+    ofstream fout(ARQUIVO_RANK, ios::binary | ios::trunc);
+    if(fout) { 
+        for(int i=0; i<qtd; i++) fout.write((char*)&arr[i], sizeof(RankEntry)); 
+        fout.close(); 
+    }
+}
+
+// Carrega o Top 10 para o array
+int lerRank(RankEntry* arr, int max) {
+    int qtd = 0; ifstream fin(ARQUIVO_RANK, ios::binary);
+    if(!fin) return 0;
+    while(qtd < max) {
+        RankEntry r; fin.read((char*)&r, sizeof(RankEntry));
+        if(fin.gcount() != sizeof(RankEntry)) break; 
+        arr[qtd++] = r;
+    }
+    fin.close(); return qtd;
 }
 
 
-void moverInimigo(int &x, int &y, int m[][25]){ // FUNÇÃO PARA MOVIMENTAÇÃO DO INIMIGO
+// =================================================================
+// === LÓGICA DO JOGO E IA =========================================
+// =================================================================
 
-    int dir = rand() % 4; // SORTEIA UMA DIREÇÃO ENTRE 0 e 3
-
-    // VERIFIÇÃO PARA MOVIMENTAÇÃO EM CAMINHO LIVRE "0", EXPLOSÃO "6" E INIMIGOS "X"
-
-    if(dir == 0 && (m[x-1][y] == 0 || m[x-1][y] == 6) && posicaoLivre(x-1, y)) x--;// CIMA
-    if(dir == 1 && (m[x+1][y] == 0 || m[x+1][y] == 6) && posicaoLivre(x+1, y)) x++;// BAIXO
-    if(dir == 2 && (m[x][y-1] == 0 || m[x][y-1] == 6) && posicaoLivre(x, y-1)) y--;// ESQUERDA
-    if(dir == 3 && (m[x][y+1] == 0 || m[x][y+1] == 6) && posicaoLivre(x, y+1)) y++;// DIREITA
+// Calcula o bônus no final da fase (quando entra no portal)
+// Penaliza por movimentos desnecessários e uso de bombas
+int calcularBonusFinal() {
+    long tempoGasto = (long)(time(0) - tempoInicio); if(tempoGasto < 1) tempoGasto = 1;
+    return (1000 / (int)tempoGasto) - (movimentos / 5) - (bombasUsadas * 2);
 }
 
+// Verifica se a posição X, Y não contém nenhum inimigo ou boss
+bool posicaoLivreCompleta(int x, int y) {
+    for(int i = 0; i < numInimigosAtivos; i++)
+        if(inimigos[i].vivo && inimigos[i].x == x && inimigos[i].y == y) return false;
+    if(bossAtivo && boss.vivo && boss.x == x && boss.y == y) return false;
+    return true;
+}
 
-void bomba(int x, int y, int m [][25]){ //FUNÇÃO PARA CHAMAR A BOMBA
-
-    if(!bombaAtiva && !bombaExplodiu){
-        bombaX = x;
-        bombaY = y; // bombaX E bombaY ESTÃO RECEBENDO A LOCALIZACÃO DO PLAYER PARA DEFINIR ONDE POR A BOMBA.
-        bombaAtiva = true; // ATIVA A BOMBA
-        bombaTimer = 7; //DEFINIÇÃO PARA EXPLODIR A BOMBA EM 0.4 SEGUNDOS.
-        m[bombaX][bombaY] = 5; //ATRIBUIÇÃO DA BOMBA NO MAPA
+// Inteligência Artificial (IA) dos inimigos comuns
+// Eles têm uma chance % de ignorar o caminho aleatório e "caçar" o jogador (px, py)
+void moverInimigoIA(int &x, int &y, int m[][25], int px, int py, int chancePerseguir = 0) {
+    // Tenta perseguir se cair na probabilidade
+    if(rand() % 100 < chancePerseguir) {
+        // Verifica pra qual lado o player está (dá -1, 0 ou 1)
+        int dx = (px > x) - (px < x); 
+        int dy = (py > y) - (py < y);
+        bool tentaXprimeiro = rand() % 2; // Sorteia se ele tenta andar na horizontal ou vertical primeiro
+        
+        for(int tent=0; tent<2; tent++) {
+            bool agoraX = (tent==0) ? tentaXprimeiro : !tentaXprimeiro;
+            if(agoraX && dx != 0) {
+                int nx = x + dx; 
+                // Se o lado estiver livre, caminha e interrompe a função
+                if((m[nx][y]==0 || m[nx][y]==6) && posicaoLivreCompleta(nx, y)) { x = nx; return; }
+            } else if(!agoraX && dy != 0) {
+                int ny = y + dy; 
+                if((m[x][ny]==0 || m[x][ny]==6) && posicaoLivreCompleta(x, ny)) { y = ny; return; }
+            }
         }
     }
-
-void explosao(int x, int y, int m [][25]){
-
-    m[x][y] = 6;// INSERÇÃO DA BOMBA ONDE ELA ESTÁ LOCALIZADA
-
-    //VERIFICAÇÃO DE CONDIÇÃO PARA EXPLOSÃO.
-
-    if (m[x-1][y]==0 or m[x-1][y]==4){
-
-        m[x-1][y]= 6;
-    }
-
-    if (m[x+1][y]==0 or m[x+1][y]==4){
-
-        m[x+1][y]= 6;
-    }
-
-    if (m[x][y-1]==0 or m[x][y-1]==4){
-
-        m[x][y-1]= 6;
-    }
-
-    if (m[x][y+1]==0 or m[x][y+1]==4){
-
-        m[x][y+1]= 6;
-    }
-
-}
-
-
-void fimExplosao(int x, int y, int m [][25]){
-
-    //VERIFICAÇÃO DE ARÉAS QUE ESTÃO COM EXPLOSÃO.
-
-    if (m[x][y] == 6){
-
-        m[x][y] = 0;
-    }
-
-    if (m[x-1][y]==6){
-
-        m[x-1][y]= 0;
-    }
-
-    if (m[x+1][y]==6){
-
-        m[x+1][y]= 0;
-    }
-
-    if (m[x][y-1]==6){
-
-        m[x][y-1]= 0;
-    }
-
-    if (m[x][y+1]==6){
-
-        m[x][y+1]= 0;
-    }
-
-
-}
-
-void setCor(int cor) {
-    if (cor == 7) {
-        cout << "\x1b[0m";          // reset
-    } else {
-        cout << "\x1b[38;5;" << cor << "m";
-    }
-}
-
-int main()
-{
-    srand(time(0)); // INICIALIZA A SEMENTE PARA GERAR MOVIMENTOS ALEATÓRIOS DIFERENTES A CADA EXECUÇÃO
-    int delayInimigo = 0;
-
-    SetConsoleOutputCP(437);// COMANDO NECESSÁRIO PARA PODER MANIPULAR OS CARACTERES.
-
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD dwMode = 0;
-    GetConsoleMode(hOut, &dwMode);
     
+    // Se não perseguiu (ou não conseguiu caminho), anda aleatoriamente
+    int dir = rand() % 4;
+    if(dir == 0 && (m[x-1][y] == 0 || m[x-1][y] == 6) && posicaoLivreCompleta(x-1, y)) x--;
+    if(dir == 1 && (m[x+1][y] == 0 || m[x+1][y] == 6) && posicaoLivreCompleta(x+1, y)) x++;
+    if(dir == 2 && (m[x][y-1] == 0 || m[x][y-1] == 6) && posicaoLivreCompleta(x, y-1)) y--;
+    if(dir == 3 && (m[x][y+1] == 0 || m[x][y+1] == 6) && posicaoLivreCompleta(x, y+1)) y++;
+}
 
-    ///ALERTA: NAO MODIFICAR O TRECHO DE CODIGO, A SEGUIR.
-        //INICIO: COMANDOS PARA QUE O CURSOR NAO FIQUE PISCANDO NA TELA
-        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-        CONSOLE_CURSOR_INFO     cursorInfo;
-        GetConsoleCursorInfo(out, &cursorInfo);
-        cursorInfo.bVisible = false; // set the cursor visibility
-        SetConsoleCursorInfo(out, &cursorInfo);
-        //FIM: COMANDOS PARA QUE O CURSOR NAO FIQUE PISCANDO NA TELA        
-        //INICIO: COMANDOS PARA REPOSICIONAR O CURSOR NO INICIO DA TELA
-        short int CX=0, CY=0;
-        COORD coord;
-        coord.X = CX;
-        coord.Y = CY;
-        //FIM: COMANDOS PARA REPOSICIONAR O CURSOR NO INICIO DA TELA
-    ///ALERTA: NAO MODIFICAR O TRECHO DE CODIGO, ACIMA.
-
-    int m[15][25] = {
-            {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
-            {1,0,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,0,1},
-            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
-            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
-            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
-            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
-            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
-            {1,4,0,4,0,4,0,4,0,4,0,0,0,4,0,4,0,4,0,4,0,4,0,4,1},
-            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
-            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
-            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
-            {1,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,1},
-            {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
-            {1,0,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,0,1},
-            {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
-        };
-
+// IA do Boss (Mais complexa, pois usa Heurística e evita perigos ativamente)
+void moverBoss(int &bx, int &by, int m[][25], int px, int py) {
+    int dirs[5][2] = {{-1,0},{1,0},{0,-1},{0,1},{0,0}}; // Pode ficar parado também
+    int melhorScore = -100000; 
+    int melhorDX = 0, melhorDY = 0;
+    
+    for(int i=0; i<5; i++) {
+        int nx = bx + dirs[i][0], ny = by + dirs[i][1];
         
+        if(nx<1 || nx>13 || ny<1 || ny>23) continue; // Fora do mapa
+        if(i != 4 && m[nx][ny] != 0 && m[nx][ny] != 6) continue; // Bateu em parede
+        if(i != 4 && !posicaoLivreCompleta(nx, ny)) continue; // Bateu em inimigo
+
+        // O Score (pontuação da direção) começa pela distância de manhattan (Tentar chegar no player)
+        int score = -(abs(nx - px) + abs(ny - py)) * 10;
+        
+        // Punição Severa (Evita morte) se o bloco analisado tiver fogo ou bomba perto
+        if(m[nx][ny] == 6) score -= 5000;
+        if(nx>0 && m[nx-1][ny]==5) score -= 2000;
+        if(nx<14 && m[nx+1][ny]==5) score -= 2000;
+        if(ny>0 && m[nx][ny-1]==5) score -= 2000;
+        if(ny<24 && m[nx][ny+1]==5) score -= 2000;
+        
+        if(i == 4) score -= 5; // Punição leve para não ficar parado o tempo todo
+
+        // Salva a melhor rota identificada
+        if(score > melhorScore) { 
+            melhorScore = score; melhorDX = dirs[i][0]; melhorDY = dirs[i][1]; 
+        }
+    }
+    // Aplica a melhor movimentação encontrada
+    bx += melhorDX; by += melhorDY;
+}
+
+// Modo AutoPlay (IA para o Personagem Principal)
+void jogarBot(int &x, int &y, int m[][25], bool &tentarBomba) {
+    tentarBomba = false;
+    int dirs[5][2] = {{0,0}, {-1,0}, {1,0}, {0,-1}, {0,1}};
+    int melhorScore = -999999; int melhorDir = 0;
+
+    for(int i=0; i<5; i++) {
+        int nx = x + dirs[i][0], ny = y + dirs[i][1];
+        if(nx<1 || nx>13 || ny<1 || ny>23) continue;
+        if(i != 0 && m[nx][ny] != 0 && m[nx][ny] != 6 && m[nx][ny] != 7) continue;
+
+        int score = 0;
+        
+        // Regra de Sobrevivência (Morte certa = Punição máxima)
+        if(m[nx][ny] == 6 || m[nx][ny] == 5) score -= 10000;
+        if(nx>0 && m[nx-1][ny]==5) score -= 5000;
+        if(nx<14 && m[nx+1][ny]==5) score -= 5000;
+        if(ny>0 && m[nx][ny-1]==5) score -= 5000;
+        if(ny<24 && m[nx][ny+1]==5) score -= 5000;
+
+        // Distância até o inimigo mais próximo
+        int distInimigo = 999;
+        for(int k=0; k<numInimigosAtivos; k++) {
+            if(inimigos[k].vivo) {
+                int dist = abs(nx - inimigos[k].x) + abs(ny - inimigos[k].y);
+                if(dist < distInimigo) distInimigo = dist;
+            }
+        }
+        if(bossAtivo && boss.vivo) {
+            int dist = abs(nx - boss.x) + abs(ny - boss.y);
+            if(dist < distInimigo) distInimigo = dist;
+        }
+
+        // Foge ativamente se os inimigos chegam perto demais
+        if(distInimigo <= 1) score -= 8000; 
+        else if(distInimigo == 2) score -= 2000;
+
+        // Se o portal já abriu, ignora caixas e foca em entrar nele
+        if(portalAtivo) {
+            score -= (abs(nx - portalX) + abs(ny - portalY)) * 10; 
+        } else {
+            // Conta as caixas quebrando e premia essa direção
+            int caixas = 0;
+            if(nx>0 && m[nx-1][ny]==4) caixas++; if(nx<14 && m[nx+1][ny]==4) caixas++;
+            if(ny>0 && m[nx][ny-1]==4) caixas++; if(ny<24 && m[nx][ny+1]==4) caixas++;
+            score += caixas * 50; 
+            
+            // Vai caçar inimigo (mas sempre respeitando a distância perigosa lida acima)
+            score -= distInimigo * 5; 
+        }
+        
+        score += rand() % 10; // Quebra de padrão pra não travar num loop infinito (ficar indo e voltando)
+        if(score > melhorScore) { melhorScore = score; melhorDir = i; }
+    }
+    
+    // Efetua o movimento
+    x += dirs[melhorDir][0]; y += dirs[melhorDir][1];
+
+    // Lógica para soltar bomba (apenas se for vantajoso e portal não ativado)
+    if(!portalAtivo) {
+        int caixas = 0;
+        if(x>0 && m[x-1][y]==4) caixas++; if(x<14 && m[x+1][y]==4) caixas++;
+        if(y>0 && m[x][y-1]==4) caixas++; if(y<24 && m[x][y+1]==4) caixas++;
+        
+        bool iniVizinho = false;
+        for(int k=0; k<numInimigosAtivos; k++)
+            if(inimigos[k].vivo && (abs(x - inimigos[k].x) + abs(y - inimigos[k].y) <= 2)) iniVizinho = true;
+            
+        // Se parou do lado de caixa ou inimigo, 20% de chance de apertar o 'B' e correr
+        if((caixas > 0 || iniVizinho) && (rand() % 100 < 20)) tentarBomba = true;
+    }
+}
+
+// Funções de controle da explosão (Criação e Limpeza na Matriz)
+void bomba(int x, int y, int m[][25]) {
+    if(!bombaAtiva && !bombaExplodiu) {
+        bombaX = x; bombaY = y; bombaAtiva = true; bombaTimer = 7; m[bombaX][bombaY] = 5;
+    }
+}
+
+void explosao(int x, int y, int m[][25]) {
+    m[x][y] = 6;
+    if(m[x-1][y]==0 || m[x-1][y]==4) m[x-1][y]= 6; if(m[x+1][y]==0 || m[x+1][y]==4) m[x+1][y]= 6;
+    if(m[x][y-1]==0 || m[x][y-1]==4) m[x][y-1]= 6; if(m[x][y+1]==0 || m[x][y+1]==4) m[x][y+1]= 6;
+}
+
+void fimExplosao(int x, int y, int m[][25]) {
+    if(m[x][y] == 6) m[x][y] = 0;
+    if(m[x-1][y] == 6) m[x-1][y] = 0; if(m[x+1][y] == 6) m[x+1][y] = 0;
+    if(m[x][y-1] == 6) m[x][y-1] = 0; if(m[x][y+1] == 6) m[x][y+1] = 0;
+}
 
 
+// =================================================================
+// === MAPAS E INICIALIZAÇÃO =======================================
+// =================================================================
 
+// Cria a geometria dos mapas de acordo com a faseAtual (Paredes indestrutíveis)
+void inicializarMapa(int m[][25], int fase) {
+    // Zera tudo primeiro
+    for(int i=0; i<15; i++) for(int j=0; j<25; j++) m[i][j] = 0;
+    
+    // Desenha as bordas fixas externas
+    for(int i=0; i<15; i++) { m[i][0]=1; m[i][24]=1; }
+    for(int j=0; j<25; j++) { m[0][j]=1; m[14][j]=1; }
 
+    if(fase <= 1) {
+        // Fase 1 Clássica (Grid padrão)
+        for(int i=2; i<14; i+=2) for(int j=2; j<24; j+=2) m[i][j] = 1;
+    } else if(fase == 2) {
+        // Fase Aberta
+        for(int i=3; i<13; i+=3) for(int j=3; j<23; j+=3) m[i][j] = 1;
+        m[6][7]=1; m[7][7]=1; m[7][17]=1; m[8][17]=1;
+    } else {
+        // Fase 3 (Arena pro Boss)
+        for(int i=3; i<5; i++) { for(int j=3; j<5; j++) m[i][j]=1; for(int j=20; j<22; j++) m[i][j]=1; }
+        for(int i=10; i<12; i++) { for(int j=3; j<5; j++) m[i][j]=1; for(int j=20; j<22; j++) m[i][j]=1; }
+        m[6][14]=1; m[7][14]=1; m[8][14]=1;
+    }
+}
 
+// Preenche os espaços vazios do mapa com os blocos quebráveis baseados na % densidade
+void gerarBlocosAleatorios(int m[][25], int spawnX, int spawnY, int densidade = 55) {
+    for(int i=1; i<14; i++) {
+        for(int j=1; j<24; j++) {
+            if(m[i][j] != 0) continue;
+            // Cria uma "área segura" de 2 blocos de distância do jogador pra ele não nascer preso
+            if(abs(i - spawnX) + abs(j - spawnY) <= 2) continue; 
+            
+            if(rand() % 100 < densidade) m[i][j] = 4;
+        }
+    }
+}
 
+// Restaura os dados dos inimigos nos locais fixos para o início de cada fase
+void resetarInimigos(int fase, int dif, int m[][25]) {
+    numInimigosAtivos = (dif == 1) ? 3 : ((dif == 2) ? 5 : 7); // Define quantos baseado na dificuldade
+    
+    // Pontos fixos de spawn para espalhar eles no mapa
+    int pos[7][2] = {{1,1}, {13,1}, {1,23}, {13,23}, {7,2}, {7,22}, {13,12}};
+    for(int i = 0; i < numInimigosAtivos; i++) {
+        inimigos[i].x = pos[i][0]; inimigos[i].y = pos[i][1];
+        inimigos[i].vivo = true; 
+        m[pos[i][0]][pos[i][1]] = 0; // Se gerou caixa no spawn deles, apaga a caixa!
+    }
+    
+    // O Boss só aparece na Fase 3 + Difícil (Level Máximo)
+    bossAtivo = (fase == 3 && dif == 3);
+    if(bossAtivo) { 
+        boss.x = 7; boss.y = 18; boss.vivo = true; m[7][18] = 0; 
+    }
+    
+    inimigosVivos = numInimigosAtivos + (bossAtivo ? 1 : 0);
+}
 
-    //POSICAO INICIAL DO PERSONAGEM NO CONSOLE
-    int x=7, y=11;
+// Sorteia o lugar do mapa (onde esteja livre) para desenhar o portal verde de fim de fase
+void colocarPortal(int m[][25], int tentativas = 200) {
+    if(tentativas <= 0) { // Safety check: Se der azar 200 vezes seguidas, varre o mapa linearmente e acha o primeiro buraco
+        for(int i=1; i<14; i++) for(int j=1; j<24; j++)
+            if(m[i][j] == 0) { m[i][j]=7; portalX=i; portalY=j; portalAtivo=true; return; }
+        return;
+    }
+    int i = 1 + rand() % 13; int j = 1 + rand() % 23;
+    if(m[i][j] == 0) { m[i][j]=7; portalX=i; portalY=j; portalAtivo=true; return; }
+    colocarPortal(m, tentativas - 1);
+}
 
-    //VARIAVEL PARA TECLA PRECIONADA
+// =================================================================
+// === LOOP PRINCIPAL DA FASE E HUD ================================
+// =================================================================
+
+// Desenha a "Interface" fixa abaixo do labirinto
+void desenharHUD() {
+    setCor(15); cout << "\n"; desenharBordaTopo(70, 33);
+    char buf[120];
+    sprintf(buf, "Jogador: %-12s   Fase: %d   Dificuldade: %d   Vidas: %d", nomeJogador.c_str(), faseAtual, dificuldade, vidas);
+    desenharLinhaLateral(buf, 70, 33);
+    
+    // Muda a exibição para alertar que é o Bot jogando
+    if(modoAutoPlay) sprintf(buf, "Tempo: %lds   Pontos: %d  |  [ MODO AUTOPLAY ATIVADO ]", (long)(time(0) - tempoInicio), pontuacao);
+    else sprintf(buf, "Tempo: %lds   Pontos: %d   Movimentos: %d   Bombas: %d", (long)(time(0) - tempoInicio), pontuacao, movimentos, bombasUsadas);
+    
+    desenharLinhaLateral(buf, 70, 33);
+    desenharLinhaLateral(70, 33);
+    desenharLinhaLateral("Comandos: W/A/S/D = Mover | B = Bomba | P = Salvar | F = Sair", 70, 33);
+    desenharBordaBase(70, 33); setCor(7);
+}
+
+// Zera apenas as condições críticas da fase em andamento se o jogador perder uma vida (Soft Reset)
+void resetarEstadoPartida() {
+    bombaAtiva = false; bombaExplodiu = false;
+    gameOverColideInimigo = false; gameOverExplosao = false; gameWin = false;
+    fimTimer = 1; vidas = 3;
+}
+
+// Zera TODA a partida quando da Game Over ou quando inicia novo jogo (Hard Reset)
+void resetarPartidaCompleta() {
+    resetarEstadoPartida();
+    pontuacao = 0; bombasUsadas = 0; movimentos = 0; caixasDestruidas = 0; faseAtual = 1;
+}
+
+// *** CÉREBRO DO JOGO (ENGINE E LOOPS DE RENDERIZAÇÃO) ***
+int executarFase() {
+    int delayInimigo = 0, delayBot = 0;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE); COORD coord = {0, 0};
+
+    int x=7, y=11; // Local de nascimento padrão do Player (Centro esquerda)
+    int m[15][25];
+    
+    inicializarMapa(m, faseAtual);
+    gerarBlocosAleatorios(m, x, y);
+    resetarInimigos(faseAtual, dificuldade, m);
+
+    bombaAtiva = false; bombaExplodiu = false;
+    gameOverColideInimigo = false; gameOverExplosao = false;
+    fimTimer = 1; portalAtivo = false; portalX = -1; portalY = -1;
+
+    if(tempoInicio == 0) tempoInicio = time(0);
     char tecla;
+    system("cls"); // Limpa tela antes de começar os frames
 
-    while(true){
 
-        ///POSICIONA A ESCRITA NO IICIO DO CONSOLE
-        SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
+    // FRAME LOOP
+    while(true) {
+        SetConsoleCursorPosition(out, coord); // Volta para a linha zero (Pintar tela sem piscar 'flicker')
 
-        ///IMPRIME O JOGO: MAPA E PERSONAGEM.
-        for(int i=0;i<15;i++){
-            for(int j=0;j<25;j++){
-                if(i==x && j==y){
-                    setCor(226);
-                    cout<< 'B'; //PERSONAGEM
-                    setCor(7);
-                }
-                else if(i==inimigoX && j==inimigoY){ // EXIBE O INIMIGO NA POSIÇÃO ATUAL
-                    setCor(196);
-                    cout<<'X';
-                    setCor(7);
-                }
-                else if(i==inimigo2X && j==inimigo2Y){
-                    setCor(196);
-                    cout<<'X';
-                    setCor(7);
-                }
-                else if(i==inimigo3X && j==inimigo3Y){
-                    setCor(196);
-                    cout<<'X';
-                    setCor(7);
-                }
-                else {
-                    switch (m[i][j]){
-                        case 0: setCor(7);cout<<" "; break; //CAMINHO
-                        case 1: setCor(94);cout<<char(219); break; // PAREDE
-                        case 4: setCor(172);cout<<char(177); break; // TIJOLO DESTRITUIVEL
-                        case 5: setCor(15);cout<<char(79); break;// BOMBA
-                        case 6: setCor(196);cout<<char('@'); break; // EXPLOSÃO
-
+        // Renderização (DESENHO DO MAPA)
+        for(int i=0; i<15; i++) {
+            for(int j=0; j<25; j++) {
+                // Sobreposição de Entidades (Para os bonecos andarem em cima do fogo/portal sem apagar ele da memória da matriz)
+                if(i==x && j==y) { cout<<"🧑"; continue; }
+                
+                bool desenhouEntidade = false;
+                for(int k=0; k<numInimigosAtivos; k++) {
+                    if(inimigos[k].vivo && i==inimigos[k].x && j==inimigos[k].y) {
+                        cout<<"👻"; desenhouEntidade = true; break;
                     }
+                }
+                if(desenhouEntidade) continue;
+
+                if(bossAtivo && boss.vivo && i==boss.x && j==boss.y) {
+                    cout<<"🧌"; continue;
+                }
+
+                // Desenho do ambiente principal
+                switch (m[i][j]) {
+                    case 0: cout<<"  "; break;  // Espaço Duplo para compensar larguras dos emojis
+                    case 1: cout<<"🧱"; break;
+                    case 4: cout<<"🕸️"; break;
+                    case 5: cout<<"💣"; break;
+                    case 6: cout<<"🔥"; break;
+                    case 7: cout<<"🌀"; break;
                 }
             }
             cout<<"\n";
-        } //FIM DA EXIBIÇÃO DO MAPA
-        setCor(15);
-        cout << "\n";
-        cout << "VIDAS: " << vidas << endl;
-        cout << "TEMPO: " << endl;
-        cout << "PONTUACAO: " << pontuacao << endl;
-        cout << "Comandos:" << endl;
-        cout << "W/A/S/D - Mover" << endl;
-        cout << "B       - Bomba" << endl;
-        cout << "F       - Desistir"  << endl;
-        setCor(7);
-        // VERIFICA SE O JOGADOR MORREU PELA EXPLOSÃO
-        if (m[x][y] == 6){
-            gameOverExplosao = true;
         }
+        
+        desenharHUD();
 
-
-        // VERIFICA COLISÃO DIRETA COM O INIMIGO
-        if (x == inimigoX && y == inimigoY){
-            //gameOverColideInimigo = true;
+        // -------------------------------------------------------------
+        // CÁLCULOS DE COLISÃO
+        // -------------------------------------------------------------
+        if (m[x][y] == 6) gameOverExplosao = true; // Você pisou na explosão?
+        
+        for(int k=0; k<numInimigosAtivos; k++) {
+            if(!inimigos[k].vivo) continue;
+            // Você bateu no inimigo?
+            if(x == inimigos[k].x && y == inimigos[k].y) gameOverColideInimigo = true;
             
+            // Inimigo pisou em bomba ou explosão? (Ele morre)
+            if(m[inimigos[k].x][inimigos[k].y] == 6 || m[inimigos[k].x][inimigos[k].y] == 5) {
+                inimigos[k].vivo = false; pontuacao += 100; inimigosVivos--;
+            }
         }
-        if (x == inimigo2X && y == inimigo2Y){
-           // gameOverColideInimigo = true;
-            
-        }
-        if (x == inimigo3X && y == inimigo3Y){
-            gameOverColideInimigo = true;
-           
-        }
-
-        // CASO O INIMIGO ESTEJA NA ÁREA DA EXPLOSÃO OU ENCOSTE NA BOMBA, ELE É REMOVIDO DO MAPA
-
-        if (inimigoX != -1 && inimigoY != -1 &&(m[inimigoX][inimigoY] == 6 || m[inimigoX][inimigoY] == 5)){
-                inimigoX = -1;
-                inimigoY = -1;
-                pontuacao = pontuacao + 100;
-                inimigosVivos--;
+        if(bossAtivo && boss.vivo) {
+            if(x == boss.x && y == boss.y) gameOverColideInimigo = true;
+            if(m[boss.x][boss.y] == 6 || m[boss.x][boss.y] == 5) {
+                boss.vivo = false; pontuacao += 500; inimigosVivos--;
+            }
         }
 
-        if (inimigo2X != -1 && inimigo2Y != -1 &&(m[inimigo2X][inimigo2Y] == 6 || m[inimigo2X][inimigo2Y] == 5)){
-                inimigo2X = -1;
-                inimigo2Y = -1;
-                pontuacao = pontuacao + 100;
-                inimigosVivos--;
+        // Verifica condição de surgimento do Portal
+        if(inimigosVivos <= 0 && !portalAtivo) {
+            colocarPortal(m);
+            SetConsoleCursorPosition(out, coord); cout << "\n";
+            setCor(46); imprimirCentralizado(">>> PORTAL ABERTO! <<<", 70); setCor(7);
+            Sleep(1500); system("cls");
+        }
+        // Vitória da Fase
+        if(portalAtivo && x == portalX && y == portalY) {
+            pontuacao += calcularBonusFinal();
+            return (faseAtual >= 3) ? ESTADO_VITORIA : ESTADO_PROXIMA_FASE;
         }
 
-        if (inimigo3X != -1 && inimigo3Y != -1 &&(m[inimigo3X][inimigo3Y] == 6 || m[inimigo3X][inimigo3Y] == 5)){
-                inimigo3X = -1;
-                inimigo3Y = -1;
-                pontuacao = pontuacao + 100;
-                inimigosVivos--;
+        // Sistema de Vidas e Mortes
+        if(gameOverColideInimigo || gameOverExplosao) {
+            vidas--;
+            if(vidas > 0) {
+                x = 7; y = 11; // Renasce no local seguro padrão
+                if(m[x][y] == 6) m[x][y] = 0; // Apaga o fogo se ele nasceu em cima de um
+                gameOverColideInimigo = false; gameOverExplosao = false;
+                
+                SetConsoleCursorPosition(out, coord); cout << "\n";
+                setCor(196); imprimirCentralizado(">>> VOCE PERDEU UMA VIDA! <<<", 70); setCor(7);
+                Sleep(800); system("cls");
+            } else {
+                return ESTADO_DERROTA; // Acabaram as vidas
+            }
         }
 
-
-
-        if (inimigosVivos == 0){
-            system("cls");
-            setCor(46);
-            cout << "VOCE VENCEU!!" << endl;
-            cout << pontuacao << endl;
-            setCor(7);
-            return 0;
-        }
-
-        // CONDIÇÃO DE DERROTA (ENCERRAR O JOGO)
-
-        if (gameOverColideInimigo){
-            system("cls");
-            setCor(196);
-            cout << "VOCE MORREU ENCOSTANDO NO INIMIGO!" << endl;
-            cout << pontuacao << endl;
-            setCor(7);
-            return 0;
-        }
-         if (gameOverExplosao){
-            system("cls");
-            setCor(196);
-            cout << "VOCE MORREU EXPLODIDO!" << endl;
-            cout << pontuacao << endl;
-            setCor(7);
-            return 0;
-        }
-
-
-        if (bombaAtiva){ // AÇÃO DE EXPLOSÃO
-            bombaTimer --;
-            if (bombaTimer <= 0){
+        // -------------------------------------------------------------
+        // RESOLUÇÃO DA LÓGICA DE BOMBAS
+        // -------------------------------------------------------------
+        if(bombaAtiva) {
+            bombaTimer--;
+            if(bombaTimer <= 0) { // Estourou!
                 m[bombaX][bombaY] = 0;
-                explosao (bombaX, bombaY, m);// CHAMADA DA EXPLOSÃO
-                bombaAtiva= false; // DESARMA A BOMBA
-                fimTimer = 8; //DEFINE 0,5 SEGUNDO PARA LIMPAR A TELA DA EXPLOSÃO
-                bombaExplodiu = true;// ATRIBUIÇÃO NECESSÁRIA PARA NÃO INSERIR OUTRA BOMBA
+                
+                // Quebra caixas nas adjacências e pontua
+                if(m[bombaX-1][bombaY]==4) { caixasDestruidas++; pontuacao += 25; }
+                if(m[bombaX+1][bombaY]==4) { caixasDestruidas++; pontuacao += 25; }
+                if(m[bombaX][bombaY-1]==4) { caixasDestruidas++; pontuacao += 25; }
+                if(m[bombaX][bombaY+1]==4) { caixasDestruidas++; pontuacao += 25; }
+                
+                explosao(bombaX, bombaY, m); 
+                bombaAtiva = false; fimTimer = 8; bombaExplodiu = true;
             }
         }
-        if(bombaExplodiu == true){
-            fimTimer --;
-            if(fimTimer <= 0){
-                fimExplosao(bombaX,bombaY,m);
-                bombaExplodiu = false;
+        
+        // Timer pra manter as chamas da explosão visíveis antes de limpar a matriz de volta pra Vazio(0)
+        if(bombaExplodiu) {
+            fimTimer--; 
+            if(fimTimer <= 0) { fimExplosao(bombaX, bombaY, m); bombaExplodiu = false; }
+        }
 
+        // -------------------------------------------------------------
+        // DETECÇÃO DE BOTÕES OU AÇÃO DA IA
+        // -------------------------------------------------------------
+        if(modoAutoPlay) {
+            delayBot++; // O bot pensa a cada X frames para não "teletransportar" rápido demais na tela
+            if(delayBot >= 3) { 
+                bool tentarBomba = false; 
+                jogarBot(x, y, m, tentarBomba); 
+                movimentos++;
+                if(tentarBomba && !bombaAtiva && !bombaExplodiu) { bomba(x, y, m); bombasUsadas++; }
+                delayBot = 0;
+            }
+            // Permite intervenção humana pra abortar o autoplay
+            if(_kbhit()) { char c = _getch(); if(c == 'f' || c == 'F') return ESTADO_DESISTIU; }
+            
+        } else {
+            // Se o Jogador Apertar uma Tecla
+            if(_kbhit()) {
+                tecla = _getch();
+                switch(tecla) {
+                    case 'w': if(m[x-1][y]==0 || m[x-1][y]==6 || m[x-1][y]==7) { x--; movimentos++; } break;
+                    case 's': if(m[x+1][y]==0 || m[x+1][y]==6 || m[x+1][y]==7) { x++; movimentos++; } break;
+                    case 'a': if(m[x][y-1]==0 || m[x][y-1]==6 || m[x][y-1]==7) { y--; movimentos++; } break;
+                    case 'd': if(m[x][y+1]==0 || m[x][y+1]==6 || m[x][y+1]==7) { y++; movimentos++; } break;
+                    case 'b': if(!bombaAtiva && !bombaExplodiu) { bomba(x, y, m); bombasUsadas++; } break;
+                    case 'p': salvarJogo(nomeJogador); return ESTADO_DESISTIU;
+                    case 'f': return ESTADO_DESISTIU;
+                }
             }
         }
 
-        ///EXECUÇÃO DE MOVIMENTAÇÃO
-
-         if ( _kbhit() ){
-            tecla = getch();
-            switch(tecla)
-            {
-
-                case 'w':
-                    if(m[x-1][y]==0 || m[x-1][y]==6)
-                        x--;
-                break;
-
-                case 's':
-                    if(m[x+1][y]==0 || m[x+1][y]==6)
-                        x++;
-                break;
-
-                case 'a':
-                    if(m[x][y-1]==0 || m[x][y-1]==6)
-                        y--;
-                break;
-
-                case 'd':
-                    if(m[x][y+1]==0 || m[x][y+1]==6)
-                         y++;
-                break;
-
-                case 'b':
-                    bomba(x, y, m);
-                break;
-
-                case 'f':
-                system("cls");
-                setCor(196);
-                cout<<"CORRE MESMO FILHINHO DA MAMAE"<<endl<<endl;
-                setCor(7);
-                return 0;
-                break;
+        // -------------------------------------------------------------
+        // ATUALIZAÇÃO DOS INIMIGOS
+        // -------------------------------------------------------------
+        delayInimigo++;
+        if(delayInimigo >= 5) { // Inimigos andam mais devagar que o player (a cada 5 frames)
+            int chance = (dificuldade == 2) ? 50 : ((dificuldade == 3) ? 75 : 0);
+            for(int k=0; k<numInimigosAtivos; k++) {
+                if(inimigos[k].vivo) moverInimigoIA(inimigos[k].x, inimigos[k].y, m, x, y, chance);
             }
-         }
-
-
-       delayInimigo++; // MOVIMENTAÇÃO DO INIMIGO A CADA CICLO DO JOGO
-
-         if(delayInimigo >= 5){ // QUANTO MAIOR, MAIS LENTO
-           moverInimigo(inimigoX, inimigoY, m);
-           moverInimigo(inimigo2X, inimigo2Y, m);
-           moverInimigo(inimigo3X, inimigo3Y, m);
-           delayInimigo = 0;
-}
-        Sleep(60);
+            if(bossAtivo && boss.vivo) moverBoss(boss.x, boss.y, m, x, y);
+            delayInimigo = 0;
+        }
+        
+        Sleep(60); // Controla a velocidade geral do "Loop do Jogo" (~16FPS)
     }
+    return ESTADO_DESISTIU;
+}
 
+// =================================================================
+// === TELAS MENUS E EXIBIÇÃO ======================================
+// =================================================================
+
+// Trava a tela para exibição de texto estático até que o usuário avance
+void aguardarTecla() {
+    setCor(244); cout << "\n  Pressione qualquer tecla para voltar..."; setCor(7);
+    while(_kbhit()) _getch(); // Limpa buffer do teclado "fantasmas"
+    _getch(); // Espera tecla
+}
+
+// Monta a base gráfica padronizada para as telinhas de menu (Ex: COMO JOGAR)
+void cabecalhoTela(string titulo, int corBorda = 33) {
+    system("cls"); desenharBordaTopo(70, corBorda); desenharLinhaLateral(70, corBorda);
+    setCor(corBorda); cout << "║"; setCor(226);
+    int pad = (70 - 2 - (int)titulo.size()) / 2;
+    for(int i=0; i<pad; i++) cout << " ";
+    cout << titulo;
+    for(int i=pad+(int)titulo.size(); i<68; i++) cout << " ";
+    setCor(corBorda); cout << "║\n"; desenharLinhaLateral(70, corBorda); desenharBordaBase(70, corBorda);
+    setCor(7); cout << "\n";
+}
+
+// Tela de Finalização exibida sempre que o 'executarFase' é rompido
+int telaGameOver(int estado) {
+    system("cls");
+    if(estado == ESTADO_VITORIA) { setCor(46); imprimirCentralizado("VOCE VENCEU!!!", 70); } 
+    else if(estado == ESTADO_DERROTA) { setCor(196); imprimirCentralizado("VOCE MORREU!", 70); } 
+    else { setCor(244); imprimirCentralizado("PARTIDA INTERROMPIDA", 70); }
+    
+    setCor(7); cout << "\n"; char buf[120];
+    sprintf(buf, "Pontuacao final: %d", pontuacao); imprimirCentralizado(buf, 70); cout << "\n";
+    
+    // Se o cara morreu ou zerou, registra a pontuacao. Se ele deu quit (desistiu), não entra no rank.
+    if(estado != ESTADO_DESISTIU) registrarNoRank(nomeJogador, pontuacao, faseAtual);
+
+    setCor(15);
+    imprimirCentralizado("[1] Continuar (rejogar a fase atual)", 70);
+    imprimirCentralizado("[2] Reiniciar do zero", 70);
+    imprimirCentralizado("[3] Voltar ao menu", 70);
+    setCor(7);
+
+    while(true) {
+        if(_kbhit()) { char c = _getch(); if(c>='1' && c<='3') return c - '0'; }
+        Sleep(30);
+    }
+}
+
+int menuPrincipal() {
+    system("cls"); 
+    setCor(196); cout << "\n";
+    // Logo "BOMBERMAN" em Ascii Art
+    imprimirCentralizado("####    ####  ###    ###  ###   ###   ######  ######   ###    ###   ###    ###   ###    ###", 90);
+    imprimirCentralizado("##  ## ##  ## ## ## ## ## ##  ##  ##  ##      ##   ##  ## ## ## ##  ##  ## ##    ## ## ##", 90);
+    imprimirCentralizado("####   ##  ## ##  ###  ## ## ##   ##  ####    ######   ##  ###  ## ## ##  ## ##   ##  ## ##", 90);
+    imprimirCentralizado("##  ## ##  ## ##       ## ## ##   ##  ##      ##  ##   ##       ## ## ##  ## ##   ##   ####", 90);
+    imprimirCentralizado("####    ####  ##       ## ##  ##  ##  ######  ##   ##  ##       ## ##  ####  ##   ##    ##", 90);
+    cout << "\n\n";
+
+    setCor(33);  imprimirCentralizado("================ MENU PRINCIPAL ================", 70); setCor(7); cout << "\n";
+    setCor(46);  imprimirCentralizado("[1] Iniciar Jogo", 70);
+    setCor(33);  imprimirCentralizado("[2] Como Jogar", 70);
+    setCor(33);  imprimirCentralizado("[3] Dificuldades", 70);
+    setCor(33);  imprimirCentralizado("[4] Sistema de Pontuacao", 70);
+    setCor(226); imprimirCentralizado("[5] Rank", 70);
+    setCor(45);  imprimirCentralizado("[6] Carregar Save", 70);
+    setCor(208); imprimirCentralizado("[7] Computador Joga Sozinho (AutoPlay)", 70); 
+    setCor(196); imprimirCentralizado("[8] Sair", 70); setCor(7); cout << "\n";
+    
+    while(true) {
+        if(_kbhit()) { char c = _getch(); if(c>='1' && c<='8') return c - '0'; }
+        Sleep(30);
+    }
+}
+
+int telaSelecionarDificuldade() {
+    cabecalhoTela("SELECIONE A DIFICULDADE", 33);
+    setCor(46);  imprimirCentralizado("[1] FACIL    - 3 inimigos", 70);
+    setCor(226); imprimirCentralizado("[2] MEDIO    - 5 inimigos", 70);
+    setCor(196); imprimirCentralizado("[3] DIFICIL  - 7 inimigos + BOSS", 70);
+    setCor(7); cout << "\n"; imprimirCentralizado("Escolha (1/2/3): ", 70);
+    while(true) {
+        if(_kbhit()) { char c = _getch(); if(c >= '1' && c <= '3') return c - '0'; }
+        Sleep(30);
+    }
+}
+
+bool telaCarregarSave() {
+    cabecalhoTela("CARREGAR SAVE", 33); JogoSave s;
+    if(!lerSave(s)) { cout << "  Nenhum save encontrado.\n"; aguardarTecla(); return false; }
+    cout << "  Save de " << s.jogador << " - Fase " << s.fase << " - Pontos: " << s.pontuacao << "\n\n";
+    cout << "  Carregar? (S/N): ";
+    while(true) {
+        if(_kbhit()) { char c = _getch(); if(c=='s' || c=='S') { aplicarSave(); return true; } if(c=='n' || c=='N') return false; }
+        Sleep(30);
+    }
+}
+
+// =================================================================
+// === MAIN (PONTO DE ENTRADA DO PROGRAMA) =========================
+// =================================================================
+int main() {
+    srand(time(0)); // Inicializa a semente randômica para os números aleatórios das fases
+    
+    // Força o terminal clássico do Windows a interpretar codificação de texto UTF-8 (Para mostrar emojis)
+    SetConsoleOutputCP(CP_UTF8); 
+
+    // Oculta o cursor que fica piscando na tela preta (deixa o jogo com mais cara de jogo e menos de DOS)
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_CURSOR_INFO cursorInfo;
+    GetConsoleCursorInfo(out, &cursorInfo);
+    cursorInfo.bVisible = false;
+    SetConsoleCursorInfo(out, &cursorInfo);
+
+    // Sistema Base de Menu e Controle Geral
+    while(true) {
+        int op = menuPrincipal();
+        
+        // JOGAR NORMAL ou AUTOPLAY
+        if(op == 1 || op == 7) { 
+            modoAutoPlay = (op == 7);
+            nomeJogador = modoAutoPlay ? "Computador" : "Player1";
+            resetarPartidaCompleta(); 
+            dificuldade = telaSelecionarDificuldade(); 
+            tempoInicio = time(0);
+            
+            // Loop de encadeamento das Fases (1 ao 3)
+            while(true) {
+                int estado = executarFase(); // Entrega o controle principal pra Engine gráfica
+                
+                // Trata as devoluções da Engine
+                if(estado == ESTADO_PROXIMA_FASE) { faseAtual++; tempoInicio = time(0); continue; }
+                if(estado == ESTADO_DESISTIU) break; 
+                
+                int escolha = telaGameOver(estado);
+                if(escolha == 1) { resetarEstadoPartida(); tempoInicio = time(0); continue; }
+                if(escolha == 2) { resetarPartidaCompleta(); dificuldade = telaSelecionarDificuldade(); tempoInicio = time(0); continue; }
+                break;
+            }
+        }
+        else if(op == 2) { cabecalhoTela("COMO JOGAR", 33); cout << "    W/A/S/D ... Mover\n    B ......... Bomba\n    F ......... Desistir\n\n"; aguardarTecla(); }
+        else if(op == 3) { cabecalhoTela("DIFICULDADES", 33); cout << "    FACIL: 3 inimigos.\n    MEDIO: 5 inimigos.\n    DIFICIL: 7 inimigos + Boss.\n"; aguardarTecla(); }
+        else if(op == 4) { cabecalhoTela("PONTUACAO", 33); cout << "    +100 Inimigo\n    +500 Boss\n    +25 Caixa\n"; aguardarTecla(); }
+        else if(op == 5) {
+            cabecalhoTela("RANK - TOP 10", 33); RankEntry arr[10]; int qtd = lerRank(arr, 10);
+            if(qtd == 0) cout << "  Nenhuma partida registrada ainda.\n";
+            else for(int i=0; i<qtd; i++) { char linha[150]; sprintf(linha, "  %3d  %7d  %4d   %-20s %s", i+1, arr[i].pontuacao, arr[i].fase, arr[i].jogador, arr[i].data); cout << linha << "\n"; }
+            aguardarTecla();
+        }
+        else if(op == 6) { // CARREGAR SAVE
+            if(telaCarregarSave()) {
+                modoAutoPlay = false; 
+                while(true) {
+                    int estado = executarFase();
+                    
+                    if(estado == ESTADO_PROXIMA_FASE) { faseAtual++; tempoInicio = time(0); continue; }
+                    if(estado == ESTADO_DESISTIU) break; 
+                    
+                    int escolha = telaGameOver(estado);
+                    if(escolha == 1) { resetarEstadoPartida(); tempoInicio = time(0); continue; }
+                    if(escolha == 2) { resetarPartidaCompleta(); dificuldade = telaSelecionarDificuldade(); tempoInicio = time(0); continue; }
+                    break;
+                }
+            }
+        }
+        else if(op == 8) { // SAIR DO JOGO
+            system("cls"); 
+            setCor(196); imprimirCentralizado("Ate a proxima!", 70); setCor(7); 
+            return 0; 
+        }
+    }
     return 0;
 }
