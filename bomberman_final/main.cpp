@@ -1,10 +1,9 @@
 /**
  * JOGO BOMBERMAN - PROJETO FINAL (M2)
- * Desenvolvido em C++
- * * Este código atende a todos os requisitos solicitados no PDF da disciplina:
- * - Menus, Dificuldades, Pontuação calculada, Rank e Sistema de Save.
- * - Elementos Técnicos: Manipulação de Arquivo, Sobrecarga, Default, Structs, Template e Recursividade.
- * - Jogo OTIMIZADO (String Buffering), Emojis UTF-8 e IA avançada (AutoPlay).
+ * Desenvolvido por Luiz Miguel Silvino, para a disciplina de Algoritmos e Programação II
+ * 
+ * Refatorado e documentado para facilitar a manutenção e compreensão das regras de negócio, 
+ * renderização e IA.
  */
 
 #include <iostream>
@@ -19,33 +18,33 @@
 using namespace std;
 
 // =================================================================
-// === CONTROLE DE MÚSICA (PlaySound via WinMM) ====================
+// === CONTROLE DE MÚSICA (API WinMM) ==============================
 // =================================================================
 
-// Toca o WAV em loop assíncrono (não trava o jogo)
+// Toca o WAV em loop assíncrono. O SND_ASYNC impede que o jogo trave esperando o fim do áudio.
+// O SND_LOOP faz a música reiniciar automaticamente.
 void iniciarMusica() {
     PlaySoundA("musica_wav.wav", NULL, SND_FILENAME | SND_ASYNC | SND_LOOP);
 }
 
-// Para a música (chamado ao sair da fase ou do jogo)
+// Interrompe qualquer som tocando atualmente na thread do jogo.
 void pararMusica() {
     PlaySoundA(NULL, NULL, SND_PURGE);
 }
 
 // =================================================================
-// === ESTRUTURAS DE DADOS (REQUISITO DO PDF: STRUCTS) =============
+// === ESTRUTURAS DE DADOS =========================================
 // =================================================================
 
-// Struct para gerenciar múltiplas bombas simultâneas
 struct Bomba {
     int x, y;
-    int timer;       // Tempo para a bomba explodir
-    bool ativa;      // Define se a bomba está no chão
-    bool explodiu;   // Define se o fogo está na tela
-    int dono;        // Para saber se quem plantou foi o Player 1 ou Player 2
+    int timer;       // Contagem regressiva de frames para explosão
+    bool ativa;      // Indica se está posicionada no mapa aguardando detonar
+    bool explodiu;   // Indica se o rastro de fogo está ativo na tela no momento
+    int dono;        // ID de quem plantou (1 = Player 1, 2 = Player 2)
 };
 
-// Struct para salvar o estado do jogo em arquivo binário
+// Estrutura compacta para serialização binária (Save Game)
 struct JogoSave {
     char data[32]; 
     char jogador[32];
@@ -58,7 +57,7 @@ struct JogoSave {
     int dificuldade;
 };
 
-// Struct para registrar as melhores pontuações (Rank Top 10)
+// Registro para o placar de líderes (Top 10)
 struct RankEntry {
     char data[32]; 
     char jogador[32]; 
@@ -66,41 +65,41 @@ struct RankEntry {
     int fase;
 };
 
-// Struct básica para representar os inimigos na tela
 struct Inimigo { 
     int x; 
     int y; 
-    bool vivo; 
+    bool vivo; // Controle de estado para pular lógica/renderização caso morto
 };
 
 
 // =================================================================
-// === VARIÁVEIS GLOBAIS DE ESTADO E FÍSICA ========================
+// === ESTADOS GLOBAIS E ENTIDADES =================================
 // =================================================================
 
 Bomba bombas[30];  
-int fimTimer[30];  
+int fimTimer[30];  // Tempo que o fogo permanece na tela após a explosão
 
 bool gameOverColideInimigo = false;
 bool gameOverExplosao = false;
 bool p1Morto = false;
 bool p2Morto = false;
 
-// Atributos do Player 1 (🧑)
+// --- Status do Player 1 ---
 int pontuacao = 0;
 int vidas = 3;
-int p1Raio = 1;         
-int p1MaxBombas = 1;    
-bool p1Imune = false;   
+int p1Raio = 1;         // Tamanho da explosão da bomba
+int p1MaxBombas = 1;    // Limite simultâneo no mapa
+bool p1Imune = false;   // Power-up de imunidade à própria explosão
 
-// Atributos do Player 2 (🟦) - Para o modo Co-Op
+// --- Status do Player 2 (Modo Co-Op) ---
 int p2Pontuacao = 0;
 int p2Vidas = 3;
 int p2Raio = 1;
 int p2MaxBombas = 1;
 bool p2Imune = false;
-int gx2 = 1, gy2 = 1; // Posição global do P2 (sem conflito com locais)
+int gx2 = 1, gy2 = 1;   // Posição global para evitar sombreamento de variáveis locais
 
+// --- Dados da Sessão ---
 int faseAtual = 1;
 int dificuldade = 1; 
 int bombasUsadas = 0, movimentos = 0, caixasDestruidas = 0;
@@ -112,6 +111,7 @@ string nomeJogador2 = "Player2";
 bool modoAutoPlay = false;       
 bool modoDoisJogadores = false;  
 
+// Códigos de controle de fluxo de tela
 const int ESTADO_VITORIA = 1;
 const int ESTADO_DERROTA = 2;
 const int ESTADO_DESISTIU = 3;
@@ -120,9 +120,9 @@ const int ESTADO_PROXIMA_FASE = 4;
 const char* ARQUIVO_SAVE = "bomberman_save.dat";
 const char* ARQUIVO_RANK = "bomberman_rank.dat";
 
-int matrizItens[15][25]; 
+int matrizItens[15][25];    // Mapeia os power-ups escondidos nas caixas
 
-Inimigo inimigos[7];        
+Inimigo inimigos[7];        // Pool estático de inimigos
 int numInimigosAtivos = 0;  
 int inimigosVivos = 0;      
 
@@ -134,15 +134,16 @@ bool portalAtivo = false;
 
 
 // =================================================================
-// === UTILIÁRIOS DE RENDERIZAÇÃO ==================================
+// === SISTEMA DE RENDERIZAÇÃO NO CONSOLE ==========================
 // =================================================================
 
+// Aplica códigos de escape ANSI para alterar a cor do texto no terminal
 void setCor(int cor) {
-    if (cor == 7) cout << "\x1b[0m"; 
-    else cout << "\x1b[38;5;" << cor << "m"; 
+    if (cor == 7) cout << "\x1b[0m"; // Reset para o padrão
+    else cout << "\x1b[38;5;" << cor << "m"; // Usa a paleta de 256 cores do terminal
 }
 
-// REQUISITO DO PDF: TEMPLATE
+// Utiliza manipulação de strings para alinhar o texto exatamente no meio da tela
 template<typename T>
 void imprimirCentralizado(T conteudo, int largura = 70) {
     stringstream ss; 
@@ -155,6 +156,7 @@ void imprimirCentralizado(T conteudo, int largura = 70) {
     cout << s << "\n";
 }
 
+// Funções para desenhar caixas de menu usando caracteres da tabela estendida
 void desenharBordaTopo(int largura, int cor) {
     setCor(cor); cout << "╔";
     for (int i = 0; i < largura - 2; i++) cout << "═"; 
@@ -167,12 +169,11 @@ void desenharBordaBase(int largura, int cor) {
     cout << "╝\n";
 }
 
-// REQUISITO DO PDF: PARÂMETRO DEFAULT E SOBRECARGA
 void desenharLinhaLateral(string conteudo, int largura = 70, int cor = 7) {
     setCor(cor); cout << "║"; setCor(7);
     
     string txt = conteudo;
-    if ((int)txt.size() > largura - 4) txt = txt.substr(0, largura - 4);
+    if ((int)txt.size() > largura - 4) txt = txt.substr(0, largura - 4); // Previne quebra de linha visual
     
     cout << " " << txt;
     for (int i = (int)txt.size() + 1; i < largura - 3; i++) cout << " ";
@@ -180,11 +181,12 @@ void desenharLinhaLateral(string conteudo, int largura = 70, int cor = 7) {
     setCor(cor); cout << "║\n"; setCor(7);
 }
 
-// REQUISITO DO PDF: SOBRECARGA
+// Sobrecarga genérica para linhas vazias
 void desenharLinhaLateral(int largura, int cor) { 
     desenharLinhaLateral("", largura, cor); 
 }
 
+// Extrai e formata a data do sistema operacional
 void obterDataAtual(char* buffer, int tam) {
     time_t t = time(0); 
     struct tm* lt = localtime(&t);
@@ -193,9 +195,10 @@ void obterDataAtual(char* buffer, int tam) {
 
 
 // =================================================================
-// === MANIPULAÇÃO DE ARQUIVOS BINÁRIOS (REQUISITO DO PDF) =========
+// === SISTEMA DE PERSISTÊNCIA (SAVE / LOAD BINÁRIO) ===============
 // =================================================================
 
+// Serialização: Copia os bytes inteiros da Struct para o arquivo
 void salvarJogo(JogoSave s) {
     ofstream f(ARQUIVO_SAVE, ios::binary);
     if (f) { 
@@ -204,6 +207,7 @@ void salvarJogo(JogoSave s) {
     }
 }
 
+// Coleta os dados globais e monta a Struct antes de salvar
 void salvarJogo(string player = "Player1") {
     JogoSave s; 
     strncpy(s.jogador, player.c_str(), 31); s.jogador[31] = '\0';
@@ -217,6 +221,7 @@ void salvarJogo(string player = "Player1") {
     salvarJogo(s);
 }
 
+// Deserialização: Restaura o bloco de memória da Struct
 bool lerSave(JogoSave &s) {
     ifstream f(ARQUIVO_SAVE, ios::binary);
     if (!f) return false; 
@@ -231,19 +236,21 @@ bool aplicarSave() {
     JogoSave s; 
     if (!lerSave(s)) return false;
     
+    // Atualiza o estado global com os dados recuperados
     faseAtual = s.fase; pontuacao = s.pontuacao; bombasUsadas = s.bombasUsadas;
     movimentos = s.movimentos; vidas = s.vidas; dificuldade = s.dificuldade;
     nomeJogador = s.jogador; tempoInicio = time(0) - s.tempoSegundos; 
     return true;
 }
 
-// REQUISITO DO PDF: RECURSIVIDADE
+// Mantém o array de Ranks ordenado no momento da inserção (usando recursividade para fins acadêmicos)
 void inserirRankRecursivo(RankEntry* arr, int &qtd, RankEntry novo, int i = 0) {
     if (i >= qtd) { 
         if (qtd < 10) arr[qtd++] = novo; 
         return; 
     }
     
+    // Se encontrou pontuação menor, empurra o resto para trás
     if (novo.pontuacao > arr[i].pontuacao) {
         RankEntry temp = arr[i]; 
         arr[i] = novo;
@@ -259,6 +266,7 @@ void registrarNoRank(string player, int pts, int fase) {
     int qtd = 0; 
     ifstream fin(ARQUIVO_RANK, ios::binary);
     
+    // Carrega o ranking atual do disco
     if (fin) {
         while (qtd < 10) {
             RankEntry r; 
@@ -269,6 +277,7 @@ void registrarNoRank(string player, int pts, int fase) {
         fin.close();
     }
     
+    // Prepara a nova entrada
     RankEntry novo; 
     strncpy(novo.jogador, player.c_str(), 31); novo.jogador[31] = '\0';
     obterDataAtual(novo.data, 32); 
@@ -276,6 +285,7 @@ void registrarNoRank(string player, int pts, int fase) {
     
     inserirRankRecursivo(arr, qtd, novo);
     
+    // Sobrescreve o arquivo com o array atualizado e ordenado
     ofstream fout(ARQUIVO_RANK, ios::binary | ios::trunc);
     if (fout) { 
         for (int i = 0; i < qtd; i++) fout.write((char*)&arr[i], sizeof(RankEntry)); 
@@ -300,7 +310,7 @@ int lerRank(RankEntry* arr, int max) {
 
 
 // =================================================================
-// === LÓGICA DE JOGO E INTELIGÊNCIA ARTIFICIAL ====================
+// === LÓGICA DE JOGO, ITENS E MATEMÁTICA ==========================
 // =================================================================
 
 void resetarItens() {
@@ -308,26 +318,28 @@ void resetarItens() {
     p2Raio = 1; p2MaxBombas = 1; p2Imune = false;
 }
 
+// Sistema de drop (Loot Table) simples baseado em percentuais
 void gerarItem(int x, int y) {
     int chance = rand() % 100;
-    if (chance < 15) matrizItens[x][y] = 10;      // Raio (🌟)
-    else if (chance < 30) matrizItens[x][y] = 11; // Bomba Extra (🎁)
-    else if (chance < 35) matrizItens[x][y] = 12; // Vida Extra (❤️)
-    else if (chance < 45) matrizItens[x][y] = 13; // Imunidade (🛡️)
+    if (chance < 15) matrizItens[x][y] = 10;      // 15% - Raio (🌟)
+    else if (chance < 30) matrizItens[x][y] = 11; // 15% - Bomba Extra (🎁)
+    else if (chance < 35) matrizItens[x][y] = 12; //  5% - Vida Extra (❤️)
+    else if (chance < 45) matrizItens[x][y] = 13; // 10% - Imunidade (🛡️)
 }
 
 void processarColetaItens(int &px, int &py, int &pts, int &vds, int &raio, int &maxBombas, bool &imune) {
     if (matrizItens[px][py] != 0) {
         switch (matrizItens[px][py]) {
             case 10: raio++; pts += 50; break;
-            case 11: if (maxBombas < 5) { maxBombas++; pts += 50; } break; // Cumulativo até 5
+            case 11: if (maxBombas < 5) { maxBombas++; pts += 50; } break; // Hard cap de 5 bombas
             case 12: vds++; pts += 100; break;
             case 13: imune = true; pts += 50; break;
         }
-        matrizItens[px][py] = 0; 
+        matrizItens[px][py] = 0; // Remove o item do mapa após coleta
     }
 }
 
+// O bônus penaliza desperdício de movimentos e excesso de tempo/bombas
 int calcularBonusFinal() {
     long tempoGasto = (long)(time(0) - tempoInicio); 
     if (tempoGasto < 1) tempoGasto = 1;
@@ -335,6 +347,7 @@ int calcularBonusFinal() {
     return (bonus > 0) ? bonus : 0;
 }
 
+// Validação de colisão combinada (Inimigos normais + Boss)
 bool posicaoLivreCompleta(int x, int y) {
     for (int i = 0; i < numInimigosAtivos; i++) {
         if (inimigos[i].vivo && inimigos[i].x == x && inimigos[i].y == y) return false;
@@ -343,9 +356,16 @@ bool posicaoLivreCompleta(int x, int y) {
     return true;
 }
 
+
+// =================================================================
+// === INTELIGÊNCIA ARTIFICIAL (INIMIGOS, BOSS E BOT) ==============
+// =================================================================
+
+// IA dos inimigos normais
 void moverInimigoIA(int &x, int &y, int m[][25], int px, int py, int chancePerseguir = 0) {
+    // Comportamento de perseguição (Direciona para a coordenada do jogador)
     if (rand() % 100 < chancePerseguir) { 
-        int dx = (px > x) - (px < x); 
+        int dx = (px > x) - (px < x); // Resulta em -1, 0 ou 1
         int dy = (py > y) - (py < y);
         bool tentaXprimeiro = rand() % 2; 
         
@@ -361,6 +381,7 @@ void moverInimigoIA(int &x, int &y, int m[][25], int px, int py, int chancePerse
         }
     }
     
+    // Movimento errático se não estiver perseguindo ou se bloqueado na perseguição
     int dir = rand() % 4;
     if (dir == 0 && (m[x - 1][y] == 0 || m[x - 1][y] == 6) && posicaoLivreCompleta(x - 1, y)) x--;
     if (dir == 1 && (m[x + 1][y] == 0 || m[x + 1][y] == 6) && posicaoLivreCompleta(x + 1, y)) x++;
@@ -368,6 +389,7 @@ void moverInimigoIA(int &x, int &y, int m[][25], int px, int py, int chancePerse
     if (dir == 3 && (m[x][y + 1] == 0 || m[x][y + 1] == 6) && posicaoLivreCompleta(x, y + 1)) y++;
 }
 
+// IA Híbrida do Boss: Mescla movimento aleatório com avaliação de heurística agressiva
 void moverBoss(int &bx, int &by, int m[][25], int px, int py) {
     int dirs[5][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {0, 0}}; 
     
@@ -382,14 +404,18 @@ void moverBoss(int &bx, int &by, int m[][25], int px, int py) {
     int melhorScore = -100000; 
     int melhorDX = 0, melhorDY = 0;
     
+    // Analisa as células vizinhas e seleciona a que deixa ele mais próximo ao player,
+    // penalizando ficar muito perto de bombas.
     for (int i = 0; i < 5; i++) {
         int nx = bx + dirs[i][0]; int ny = by + dirs[i][1];
         if (nx < 1 || nx > 13 || ny < 1 || ny > 23) continue; 
         if (i != 4 && m[nx][ny] != 0 && m[nx][ny] != 6) continue; 
         if (i != 4 && !posicaoLivreCompleta(nx, ny)) continue; 
 
+        // Heurística base: Menor distância Manhattan = maior Score
         int score = -(abs(nx - px) + abs(ny - py)) * 10; 
         
+        // Evita fogo e células encostadas em bombas para sobreviver
         if (m[nx][ny] == 6) score -= 5000;
         if (nx > 0 && m[nx - 1][ny] == 5) score -= 2000;
         if (nx < 14 && m[nx + 1][ny] == 5) score -= 2000;
@@ -401,19 +427,20 @@ void moverBoss(int &bx, int &by, int m[][25], int px, int py) {
     bx += melhorDX; by += melhorDY;
 }
 
-// Calcula o mapa de perigo levando em conta raio real de cada bomba e paredes
+// Cria um grid virtual das áreas que estarão em perigo devido a bombas ativas (Usado pela IA Bot)
 void calcularMapaPerigo(bool perigo[15][25], int urgencia[15][25], int m[][25]) {
     for (int i = 0; i < 15; i++)
         for (int j = 0; j < 25; j++) { perigo[i][j] = false; urgencia[i][j] = 0; }
 
     int dirs4[4][2] = {{-1,0},{1,0},{0,-1},{0,1}};
 
+    // Processamento similar ao Raycasting: projeta o alcance da explosão em todas as 4 direções
     for (int b = 0; b < 30; b++) {
         if (!bombas[b].ativa) continue;
 
         int bx = bombas[b].x, by = bombas[b].y;
         int raio = (bombas[b].dono == 1) ? p1Raio : p2Raio;
-        int timer = bombas[b].timer; // Quanto menor, mais urgente fugir
+        int timer = bombas[b].timer; 
 
         perigo[bx][by] = true;
         if (urgencia[bx][by] < timer) urgencia[bx][by] = timer;
@@ -423,29 +450,31 @@ void calcularMapaPerigo(bool perigo[15][25], int urgencia[15][25], int m[][25]) 
                 int nx = bx + dirs4[d][0] * r;
                 int ny = by + dirs4[d][1] * r;
                 if (nx < 0 || nx > 14 || ny < 0 || ny > 24) break;
-                if (m[nx][ny] == 1) break; // Parede sólida bloqueia o fogo
+                if (m[nx][ny] == 1) break; // Parede indestrutível isola o fogo
+                
                 perigo[nx][ny] = true;
                 if (urgencia[nx][ny] < timer) urgencia[nx][ny] = timer;
-                if (m[nx][ny] == 4) break; // Caixa quebrável: fogo para aqui
+                if (m[nx][ny] == 4) break; // Parede de tijolo absorve o fogo final
             }
         }
     }
-    // Fogo ativo (célula == 6) também é perigo imediato
+    
+    // Adiciona fogo ativo ao mapa de perigo imediato (urgência 0)
     for (int i = 0; i < 15; i++)
         for (int j = 0; j < 25; j++)
             if (m[i][j] == 6) { perigo[i][j] = true; urgencia[i][j] = 0; }
 }
 
-// Verifica se existe pelo menos 1 célula segura acessível a partir de (sx,sy)
-// após plantar uma bomba imaginária em (bx,by) com o raio do bot
+// Algoritmo de Busca em Largura (BFS - Breadth-First Search)
+// Verifica se, caso o Bot plante uma bomba, haverá um caminho real para escapar da própria explosão.
 bool temFugaSegura(int sx, int sy, int bx, int by, int m[][25]) {
-    // Simula o perigo da bomba hipotética
     bool perigoSim[15][25];
     int urgSim[15][25];
-    calcularMapaPerigo(perigoSim, urgSim, m);
+    calcularMapaPerigo(perigoSim, urgSim, m); // Mapeia bombas atuais
 
-    // Adiciona a bomba hipotética no mapa de perigo
     int dirs4[4][2] = {{-1,0},{1,0},{0,-1},{0,1}};
+    
+    // Adiciona a bomba "imaginária" ao mapa de perigo do Bot
     perigoSim[bx][by] = true;
     for (int d = 0; d < 4; d++) {
         for (int r = 1; r <= p1Raio; r++) {
@@ -458,16 +487,19 @@ bool temFugaSegura(int sx, int sy, int bx, int by, int m[][25]) {
         }
     }
 
-    // BFS a partir de sx,sy para encontrar célula segura acessível
+    // Inicialização manual de Fila para rodar a lógica BFS (garantir rota livre)
     bool visitado[15][25] = {false};
     int filax[200], filay[200];
     int ini = 0, fim = 0;
+    
     filax[fim] = sx; filay[fim] = sy; fim++;
     visitado[sx][sy] = true;
 
+    // Processa a fila descobrindo adjacências
     while (ini < fim) {
         int cx = filax[ini], cy = filay[ini]; ini++;
-        if (!perigoSim[cx][cy]) return true; // Achou célula segura!
+        if (!perigoSim[cx][cy]) return true; // Achou o 'Safe Zone', fuga é possível!
+        
         for (int d = 0; d < 4; d++) {
             int nx = cx + dirs4[d][0];
             int ny = cy + dirs4[d][1];
@@ -478,48 +510,40 @@ bool temFugaSegura(int sx, int sy, int bx, int by, int m[][25]) {
             if (fim < 200) { filax[fim] = nx; filay[fim] = ny; fim++; }
         }
     }
-    return false; // Nenhuma saída segura encontrada
+    return false; // Se a fila esgotou e não achou saída segura, não pode plantar a bomba
 }
 
+// "Cérebro" do Bot de Autoplay (Comportamento de Sistema Especialista)
 void jogarBot(int &x, int &y, int m[][25], bool &tentarBomba) {
     tentarBomba = false;
     int dirs[5][2] = {{0,0},{-1,0},{1,0},{0,-1},{0,1}};
 
-    // === PASSO 1: Mapa de perigo correto (raio real de cada bomba, para nas paredes) ===
     bool perigo[15][25];
     int urgencia[15][25];
     calcularMapaPerigo(perigo, urgencia, m);
 
     bool emPerigo = perigo[x][y];
-
-    // === PASSO 2: Escolha de movimento por pontuação ===
     int melhorScore = -9999999;
-    int melhorDir = 0; // Parado por padrão
+    int melhorDir = 0; 
 
+    // Avalia o score de ficar parado ou andar para as 4 direções
     for (int i = 0; i < 5; i++) {
         int nx = x + dirs[i][0];
         int ny = y + dirs[i][1];
         if (nx < 1 || nx > 13 || ny < 1 || ny > 23) continue;
-        // Só pode ir para células livres (ou fogo/portal que já vão sumir)
         if (i != 0 && m[nx][ny] != 0 && m[nx][ny] != 6 && m[nx][ny] != 7) continue;
 
         int score = 0;
 
-        // --- PRIORIDADE MÁXIMA: fugir de perigo ---
+        // PRIORIDADE 1: Avaliação de Perigo Imortal (Fogo / Bombas)
         if (perigo[nx][ny]) {
-            // Penalidade base por entrar em perigo
-            score -= 500000;
-            // Penalidade extra proporcional à urgência (timer baixo = morte iminente)
-            score -= (30 - urgencia[nx][ny]) * 5000;
+            score -= 500000; // Recusa veemente
+            score -= (30 - urgencia[nx][ny]) * 5000; // Penaliza mais forte se a explosão estiver perto de ocorrer
         }
+        if (emPerigo && !perigo[nx][ny]) score += 300000; // Recompensa enorme por escapar
+        if (i == 0 && emPerigo) score -= 400000; // Penaliza severamente ficar parado enquanto está na zona de fogo
 
-        // Bônus por sair de célula perigosa
-        if (emPerigo && !perigo[nx][ny]) score += 300000;
-
-        // Se estou em perigo e parado (i==0), penalidade enorme
-        if (i == 0 && emPerigo) score -= 400000;
-
-        // --- PRIORIDADE ALTA: não andar em cima de inimigo ---
+        // PRIORIDADE 2: Avaliação de Perigo Móvel (Distância de Inimigos)
         int distInimigo = 999;
         for (int k = 0; k < numInimigosAtivos; k++) {
             if (!inimigos[k].vivo) continue;
@@ -530,46 +554,43 @@ void jogarBot(int &x, int &y, int m[][25], bool &tentarBomba) {
             int dist = abs(nx - boss.x) + abs(ny - boss.y);
             if (dist < distInimigo) distInimigo = dist;
         }
-        if (distInimigo == 0) score -= 800000; // Morte certa
-        else if (distInimigo == 1) score -= 150000;
+        
+        if (distInimigo == 0) score -= 800000;      // Suicídio no colo do monstro
+        else if (distInimigo == 1) score -= 150000; // Muito próximo
         else if (distInimigo == 2) score -= 30000;
         else if (distInimigo == 3) score -= 5000;
 
-        // --- OBJETIVOS: portal > itens > inimigos > caixas adjacentes ---
+        // OBJETIVOS SECUNDÁRIOS: Portais e caixas
         if (portalAtivo) {
-            // Vai para o portal o mais rápido possível
-            score -= (abs(nx - portalX) + abs(ny - portalY)) * 1000;
+            score -= (abs(nx - portalX) + abs(ny - portalY)) * 1000; // Atraído magneticamente pro portal
         } else {
-            // Coleta itens no chão (prioridade alta)
-            if (matrizItens[nx][ny] != 0) score += 8000;
-
-            // Aproximação de inimigos para matá-los com bomba (prioridade média-alta)
+            if (matrizItens[nx][ny] != 0) score += 8000; // Coleta de loot
+            
+            // Persegue inimigos sutilmente para atacá-los
             if (distInimigo > 1 && distInimigo < 8 && !emPerigo)
                 score += (8 - distInimigo) * 400;
 
-            // Ficar adjacente a caixas (prioridade baixa — só quebra se não tiver inimigo por perto)
+            // Ficar perto de blocos maciços para farmar (apenas se seguro)
             if (distInimigo >= 5) {
                 int caixas = 0;
                 if (nx > 0 && m[nx-1][ny] == 4) caixas++;
                 if (nx < 14 && m[nx+1][ny] == 4) caixas++;
                 if (ny > 0 && m[nx][ny-1] == 4) caixas++;
                 if (ny < 24 && m[nx][ny+1] == 4) caixas++;
-                score += caixas * 150; // Peso bem menor que antes (era 500)
+                score += caixas * 150; 
             }
         }
 
-        // Pequena aleatoriedade para não travar em ciclos
-        score += rand() % 20;
+        score += rand() % 20; // Ruído aleatório mínimo para quebrar loops infinitos presos em quinas
 
+        // Seleciona a ação que ofereceu a pontuação mais vantajosa
         if (score > melhorScore) { melhorScore = score; melhorDir = i; }
     }
 
     x += dirs[melhorDir][0];
     y += dirs[melhorDir][1];
 
-    // === PASSO 3: Decidir se planta bomba ===
-    // Condições: não está em perigo, não está já com bomba ativa nessa célula,
-    // e OBRIGATORIAMENTE tem rota de fuga após plantar
+    // Decisão final de Ataque: Bot vai tentar plantar a bomba?
     if (!portalAtivo && !perigo[x][y]) {
         int caixas = 0;
         if (x > 0 && m[x-1][y] == 4) caixas++;
@@ -579,63 +600,73 @@ void jogarBot(int &x, int &y, int m[][25], bool &tentarBomba) {
 
         bool iniVizinho = false;
         for (int k = 0; k < numInimigosAtivos; k++) {
-            if (inimigos[k].vivo && (abs(x - inimigos[k].x) + abs(y - inimigos[k].y) <= 2))
-                iniVizinho = true;
+            if (inimigos[k].vivo && (abs(x - inimigos[k].x) + abs(y - inimigos[k].y) <= 2)) iniVizinho = true;
         }
-        if (bossAtivo && boss.vivo && (abs(x - boss.x) + abs(y - boss.y) <= 2))
-            iniVizinho = true;
+        if (bossAtivo && boss.vivo && (abs(x - boss.x) + abs(y - boss.y) <= 2)) iniVizinho = true;
 
         bool temAlvo = (caixas > 0 || iniVizinho);
-        // Só planta se tem alvo E tem fuga garantida (verificação via BFS)
+        
+        // Verifica a lógica de BFS antes de soltar a bomba real, evitando se auto-destruir
         if (temAlvo && temFugaSegura(x, y, x, y, m)) {
             tentarBomba = true;
         }
     }
 }
 
+
+// =================================================================
+// === LÓGICA DE EXPLOSÕES E FÍSICA ================================
+// =================================================================
+
 void plantarBomba(int x, int y, int m[][25], int maxB, int idDono) {
     int ativas = 0;
     for (int i = 0; i < 30; i++) if (bombas[i].ativa && bombas[i].dono == idDono) ativas++;
     if (ativas >= maxB) return; 
 
+    // Aloca a primeira entidade 'Bomba' inativa disponível no vetor
     for (int i = 0; i < 30; i++) {
         if (!bombas[i].ativa && !bombas[i].explodiu) {
             bombas[i].x = x; bombas[i].y = y; 
-            // BOMBA CORRIGIDA: Estoura extremamente mais rápido agora!
             bombas[i].timer = 25; 
             bombas[i].ativa = true; bombas[i].dono = idDono;
-            m[x][y] = 5;
+            m[x][y] = 5; // Sinaliza o terreno ocupado
             break;
         }
     }
 }
 
+// Expande o fogo usando Raycasting nas 4 direções
 void explosaoLogica(int bx, int by, int raio, int m[][25], int idDono) {
     m[bx][by] = 6;
     int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
     
     for (int d = 0; d < 4; d++) {
-        int caixasRestantes = raio; // Quantas caixas quebráveis o fogo pode atravessar
+        int caixasRestantes = raio; // Limite de perfuração baseado na força do Player
+        
         for (int r = 1; r <= raio; r++) { 
             int nx = bx + dirs[d][0] * r;
             int ny = by + dirs[d][1] * r;
             
+            // Bateu em limite do mapa ou parede indestrutível
             if (nx < 1 || nx > 13 || ny < 1 || ny > 23 || m[nx][ny] == 1) break; 
             
+            // Destruição de Caixa Quebrável
             if (m[nx][ny] == 4) {  
                 m[nx][ny] = 6; 
                 caixasDestruidas++; 
                 if (idDono == 1) pontuacao += 25; else p2Pontuacao += 25; 
-                gerarItem(nx, ny); 
+                gerarItem(nx, ny); // Rolagem do drop
+                
                 caixasRestantes--;
-                if (caixasRestantes <= 0) break; // Para se não tiver mais caixas permitidas
-                continue; // Continua passando se ainda tiver raio
+                if (caixasRestantes <= 0) break; // Trava o laser do fogo se acabou as perfurações
+                continue; 
             }
             m[nx][ny] = 6;
         }
     }
 }
 
+// Função gêmea da Explosão, varre os mesmos caminhos devolvendo à matriz 'vazia'
 void limparExplosao(int bx, int by, int raio, int m[][25]) {
     if (m[bx][by] == 6) m[bx][by] = 0;
     int dirs[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
@@ -655,14 +686,17 @@ void limparExplosao(int bx, int by, int raio, int m[][25]) {
 void inicializarMapa(int m[][25], int fase) {
     for (int i = 0; i < 15; i++) for (int j = 0; j < 25; j++) { m[i][j] = 0; matrizItens[i][j] = 0; }
     
+    // Bordas Laterais do Mapa
     for (int i = 0; i < 15; i++) { m[i][0] = 1; m[i][24] = 1; }
     for (int j = 0; j < 25; j++) { m[0][j] = 1; m[14][j] = 1; }
 
+    // Fases Iniciais (Estilo Xadrez Tradicional do Bomberman)
     if (fase <= 2) {
         for (int i = 2; i < 14; i += 2) {
             for (int j = 2; j < 24; j += 2) m[i][j] = 1;
         }
     } 
+    // Fase Avançada (Arena Aberta com pilares pontuais para enfrentar o Boss)
     else {
         for (int i = 3; i < 5; i++) { for (int j = 3; j < 5; j++) m[i][j] = 1; for (int j = 20; j < 22; j++) m[i][j] = 1; }
         for (int i = 10; i < 12; i++) { for (int j = 3; j < 5; j++) m[i][j] = 1; for (int j = 20; j < 22; j++) m[i][j] = 1; }
@@ -670,10 +704,13 @@ void inicializarMapa(int m[][25], int fase) {
     }
 }
 
+// Dispersa caixas no grid respeitando as margens de Spawn dos jogadores
 void gerarBlocosAleatorios(int m[][25], int spawnX, int spawnY, int spX2 = 0, int spY2 = 0, int densidade = 25) {
     for (int i = 1; i < 14; i++) {
         for (int j = 1; j < 24; j++) {
             if (m[i][j] != 0) continue; 
+            
+            // Distância Manhattan para impedir de nascer preso
             if (abs(i - spawnX) + abs(j - spawnY) <= 2) continue; 
             if (modoDoisJogadores && (abs(i - spX2) + abs(j - spY2) <= 2)) continue; 
             
@@ -691,13 +728,13 @@ void resetarInimigos(int fase, int dif, int m[][25]) {
         inimigos[i].vivo = true; m[pos[i][0]][pos[i][1]] = 0; 
     }
     
-    bossAtivo = (fase == 3); // Boss aparece na fase 3 em qualquer dificuldade
+    bossAtivo = (fase == 3);
     if (bossAtivo) { boss.x = 7; boss.y = 18; boss.vivo = true; m[7][18] = 0; }
     
     inimigosVivos = numInimigosAtivos + (bossAtivo ? 1 : 0);
 }
 
-// REQUISITO DO PDF: RECURSIVIDADE
+// Algoritmo de tentativa recursiva até sortear um tile vazio no mapa para ancorar o portal
 void colocarPortal(int m[][25], int tentativas = 200) {
     if (tentativas <= 0) { 
         for (int i = 1; i < 14; i++) for (int j = 1; j < 24; j++)
@@ -763,13 +800,15 @@ void resetarPartidaCompleta() {
 }
 
 
-// >>> CÉREBRO DO JOGO (LOOP DA FASE) <<<
+// =================================================================
+// === GAME LOOP PRINCIPAL DA FASE (TICK SYSTEM) ===================
+// =================================================================
+
 int executarFase() {
     int delayInimigo = 0, delayBot = 0, delayBoss = 0;
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE); COORD coord = {0, 0};
 
     int x = 7, y = 11;
-    // Usa as globais gx2/gy2 para posição do P2, evitando conflito de escopo
     gx2 = 1; gy2 = 1;
 
     int m[15][25];
@@ -782,9 +821,10 @@ int executarFase() {
     resetarInimigos(faseAtual, dificuldade, m);
     
     if (modoDoisJogadores) {
+        // Resolve colisões iniciais de Spawn de Player no Co-Op
         for (int k = 0; k < numInimigosAtivos; k++) {
             if (inimigos[k].x == gx2 && inimigos[k].y == gy2 && inimigos[k].vivo) {
-                inimigos[k].x = 13; inimigos[k].y = 23; // Reposiciona em vez de matar
+                inimigos[k].x = 13; inimigos[k].y = 23; 
             }
         }
     }
@@ -795,22 +835,25 @@ int executarFase() {
 
     if (tempoInicio == 0) tempoInicio = time(0);
     system("cls");
-    iniciarMusica(); // Toca a música em loop durante a fase
+    iniciarMusica();
 
-    // === INÍCIO DO FRAME LOOP DO JOGO ===
+    // === INÍCIO DO FRAME LOOP ===
     while (true) {
+        // Redefine o cursor na posição (0,0) em vez de dar `cls`, evitando flicker pesado
         SetConsoleCursorPosition(out, coord); 
 
         if (!p1Morto) processarColetaItens(x, y, pontuacao, vidas, p1Raio, p1MaxBombas, p1Imune);
         if (!p2Morto) processarColetaItens(gx2, gy2, p2Pontuacao, p2Vidas, p2Raio, p2MaxBombas, p2Imune);
 
-        // >> SOLUÇÃO DE PERFORMANCE: OTIMIZAÇÃO POR STRING BUFFER
-        // Agora construímos a tela inteira antes de usar o cout. Acabaram os lags!
+        // OTIMIZAÇÃO (Double Buffering via String):
+        // Concatena todos os caracteres numa única string pra despachar no 'cout' 
+        // de uma vez só, garantindo FPS liso no console.
         string tela = "";
         
         for (int i = 0; i < 15; i++) {
             for (int j = 0; j < 25; j++) {
                 
+                // Prioridade 1 de Renderização: Entidades Dinâmicas (Players e Inimigos)
                 if (!p1Morto && i == x && j == y) { tela += "🧑"; continue; }
                 if (!p2Morto && i == gx2 && j == gy2) { tela += "🟦"; continue; }
                 
@@ -822,6 +865,7 @@ int executarFase() {
 
                 if (bossAtivo && boss.vivo && i == boss.x && j == boss.y) { tela += "🧌"; continue; }
 
+                // Prioridade 2 de Renderização: Lotes e PowerUps Expostos
                 if (matrizItens[i][j] != 0 && m[i][j] == 0) {
                     if (matrizItens[i][j] == 10) tela += "🌟";
                     else if (matrizItens[i][j] == 11) tela += "🎁";
@@ -830,6 +874,7 @@ int executarFase() {
                     continue;
                 }
 
+                // Prioridade Base de Renderização: TileMap e Background
                 switch (m[i][j]) {
                     case 0: tela += "  "; break;  
                     case 1: tela += "🧱"; break;
@@ -841,11 +886,11 @@ int executarFase() {
             }
             tela += "\n";
         }
-        cout << tela; // Imprime as 375 posições de uma vez!
+        cout << tela; // Dispatch final na tela!
         
         desenharHUD(); 
 
-        // >> VERIFICAÇÃO DE DANO E COLISÃO
+        // >> AVALIAÇÃO DE HITBOXES (Colisão de Dano)
         bool p1MorreuAgora = false;
         bool p2MorreuAgora = false;
 
@@ -858,6 +903,7 @@ int executarFase() {
             if (!p1Morto && x == inimigos[k].x && y == inimigos[k].y) p1MorreuAgora = true;
             if (!p2Morto && gx2 == inimigos[k].x && gy2 == inimigos[k].y) p2MorreuAgora = true;
             
+            // Verifica se as chamas pegaram em algum inimigo
             if (m[inimigos[k].x][inimigos[k].y] == 6 || m[inimigos[k].x][inimigos[k].y] == 5) {
                 inimigos[k].vivo = false; pontuacao += 100; inimigosVivos--;
             }
@@ -868,7 +914,7 @@ int executarFase() {
             if (m[boss.x][boss.y] == 6 || m[boss.x][boss.y] == 5) { boss.vivo = false; pontuacao += 500; inimigosVivos--; }
         }
 
-        // >> TRANSIÇÃO E VITÓRIA DA FASE
+        // >> MÁQUINA DE ESTADO E TRANSIÇÕES DE CENA
         if (inimigosVivos <= 0 && !portalAtivo) {
             colocarPortal(m); 
             SetConsoleCursorPosition(out, coord); cout << "\n";
@@ -878,13 +924,14 @@ int executarFase() {
         
         if (portalAtivo && ((!p1Morto && x == portalX && y == portalY) || (!p2Morto && gx2 == portalX && gy2 == portalY))) {
             pontuacao += calcularBonusFinal();
-            pararMusica(); // Para a música ao avançar de fase
+            pararMusica(); 
             SetConsoleCursorPosition(out, coord); cout << "\n";
             setCor(13); imprimirCentralizado(">>> AVANCANDO DE FASE E LIMPANDO INVENTARIO... <<<", 70); setCor(7);
             Sleep(1800);
             return (faseAtual >= 3) ? ESTADO_VITORIA : ESTADO_PROXIMA_FASE; 
         }
 
+        // Controle de Respawn Pós-Morte
         if (p1MorreuAgora) {
             vidas--;
             if (vidas > 0) {
@@ -904,7 +951,7 @@ int executarFase() {
 
         if (p1Morto && p2Morto) { pararMusica(); return ESTADO_DERROTA; }
 
-        // >> TIMERS E DESTRUIÇÃO (FOGO E BOMBA)
+        // >> GESTÃO DE ESTADOS DAS BOMBAS E FOGO PÓS-EXPLOSÃO
         for (int i = 0; i < 30; i++) {
             if (bombas[i].ativa) {
                 bombas[i].timer--; 
@@ -914,7 +961,7 @@ int executarFase() {
                     int raioC = (bombas[i].dono == 1) ? p1Raio : p2Raio; 
                     explosaoLogica(bombas[i].x, bombas[i].y, raioC, m, bombas[i].dono);
                     bombas[i].ativa = false; 
-                    fimTimer[i] = 10; // Fogo some mais rápido agora
+                    fimTimer[i] = 10; 
                     bombas[i].explodiu = true;
                 }
             }
@@ -928,10 +975,10 @@ int executarFase() {
             }
         }
 
-        // >> CONTROLES
+        // >> LEITURA E PROCESSAMENTO DE INPUTS (Não Fica Bloqueado)
         if (modoAutoPlay) {
             delayBot++; 
-            if (delayBot >= 6 && !p1Morto) { // Bot reage mais rápido ao perigo
+            if (delayBot >= 6 && !p1Morto) { 
                 bool tentarBomba = false; 
                 jogarBot(x, y, m, tentarBomba); movimentos++;
                 if (tentarBomba) { plantarBomba(x, y, m, p1MaxBombas, 1); bombasUsadas++; }
@@ -943,6 +990,7 @@ int executarFase() {
             if (_kbhit()) {
                 int tecla = _getch();
                 
+                // Teclas Especiais (Setas Direcionais enviam o prefixo de interrupção 224 primeiro)
                 if (tecla == 224) { 
                     tecla = _getch();
                     if (!p2Morto) {
@@ -954,13 +1002,14 @@ int executarFase() {
                         }
                     }
                 } else {
+                    // Controles P1 (WASD)
                     switch (tecla) { 
                         case 'w': case 'W': if (!p1Morto && (m[x - 1][y] == 0 || m[x - 1][y] == 6 || m[x - 1][y] == 7)) { x--; movimentos++; } break;
                         case 's': case 'S': if (!p1Morto && (m[x + 1][y] == 0 || m[x + 1][y] == 6 || m[x + 1][y] == 7)) { x++; movimentos++; } break;
                         case 'a': case 'A': if (!p1Morto && (m[x][y - 1] == 0 || m[x][y - 1] == 6 || m[x][y - 1] == 7)) { y--; movimentos++; } break;
                         case 'd': case 'D': if (!p1Morto && (m[x][y + 1] == 0 || m[x][y + 1] == 6 || m[x][y + 1] == 7)) { y++; movimentos++; } break;
                         case 'b': case 'B': if (!p1Morto) { plantarBomba(x, y, m, p1MaxBombas, 1); bombasUsadas++; } break;
-                        case 13:  if (!p2Morto) { plantarBomba(gx2, gy2, m, p2MaxBombas, 2); } break; 
+                        case 13:  if (!p2Morto) { plantarBomba(gx2, gy2, m, p2MaxBombas, 2); } break; // Tecla ENTER para P2
                         case 'p': case 'P': pararMusica(); salvarJogo(nomeJogador); setCor(46); imprimirCentralizado("Jogo salvo! Saindo...", 70); setCor(7); Sleep(1000); return ESTADO_DESISTIU;
                         case 'f': case 'F': pararMusica(); return ESTADO_DESISTIU;
                     }
@@ -968,7 +1017,7 @@ int executarFase() {
             }
         }
 
-        // >> UPDATES INIMIGOS (Balanceado para a nova velocidade do jogo)
+        // >> SISTEMA DE DELAY DE INIMIGOS (Faz os inimigos não andarem a 30 FPS diretos)
         delayInimigo++; delayBoss++;
         
         if (delayInimigo >= 12) { 
@@ -978,6 +1027,7 @@ int executarFase() {
                     int alvoX = x; int alvoY = y;
                     if (modoDoisJogadores && !p2Morto && p1Morto) { alvoX = gx2; alvoY = gy2; } 
                     else if (modoDoisJogadores && !p2Morto && !p1Morto) { 
+                        // Foca no Player mais próximo em cenários co-op
                         if (abs(inimigos[k].x - gx2) + abs(inimigos[k].y - gy2) < abs(inimigos[k].x - x) + abs(inimigos[k].y - y)) {
                             alvoX = gx2; alvoY = gy2;
                         }
@@ -1000,7 +1050,7 @@ int executarFase() {
             delayBoss = 0;
         }
         
-        // LIMITADOR DA ENGINE FPS: Mais rápido e fluido.
+        // LIMITADOR DA ENGINE FPS: Determina o ciclo/sincronia do jogo no Windows.
         Sleep(30); 
     }
     pararMusica();
@@ -1008,12 +1058,12 @@ int executarFase() {
 }
 
 // =================================================================
-// === TELAS MENUS E EXIBIÇÃO ======================================
+// === TELAS MENUS E EXIBIÇÃO DA UI ================================
 // =================================================================
 
 void aguardarTecla() {
     setCor(244); cout << "\n  Pressione qualquer tecla para voltar..."; setCor(7);
-    while (_kbhit()) _getch(); 
+    while (_kbhit()) _getch(); // Limpa sujeira no buffer de teclado antes
     _getch(); 
 }
 
@@ -1035,14 +1085,15 @@ void cabecalhoTela(string titulo, int corBorda = 33) {
     setCor(7); cout << "\n";
 }
 
+// Função nativa para contornar problemas com strings no 'cin' com _getch visualizado interativamente
 void lerStringConsole(string &str) {
     str = "";
     while (true) {
         char c = _getch();
-        if (c == 13 || c == 10) {  if (str.length() > 0) break; } 
-        else if (c == 8) { 
+        if (c == 13 || c == 10) {  if (str.length() > 0) break; }  // Enter
+        else if (c == 8) {                                         // Backspace
             if (str.length() > 0) { str.pop_back(); cout << "\b \b"; }
-        } else if (c >= 32 && c <= 126 && str.length() < 15) { 
+        } else if (c >= 32 && c <= 126 && str.length() < 15) {     // Limite visual
             str += c; cout << c;
         }
     }
@@ -1057,6 +1108,7 @@ void configurarNomesJogadores() {
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_CURSOR_INFO cursorInfo;
     GetConsoleCursorInfo(out, &cursorInfo);
+    
     cursorInfo.bVisible = true; SetConsoleCursorInfo(out, &cursorInfo);
 
     cout << "\n  Digite o nome do Jogador 1 (Aperte ENTER): ";
@@ -1082,6 +1134,7 @@ int telaGameOver(int estado) {
     sprintf(buf, "Pontuacao P1 (%s): %d", nomeJogador.c_str(), pontuacao); imprimirCentralizado(buf, 70); cout << "\n";
     if (modoDoisJogadores) { sprintf(buf, "Pontuacao P2 (%s): %d", nomeJogador2.c_str(), p2Pontuacao); imprimirCentralizado(buf, 70); cout << "\n"; }
 
+    // Salva recordes automaticamente a não ser que tenha sido Quit
     if (estado != ESTADO_DESISTIU) {
         if (modoDoisJogadores) {
             string nomeCombinado = nomeJogador + " + " + nomeJogador2;
@@ -1159,17 +1212,19 @@ bool telaCarregarSave() {
 }
 
 // =================================================================
-// === ENTRADA PRINCIPAL DO SISTEMA ================================
+// === INICIALIZAÇÃO PRINCIPAL DO SISTEMA ==========================
 // =================================================================
 int main() {
-    srand(time(0)); 
-    SetConsoleOutputCP(CP_UTF8); 
+    srand(time(0)); // Semeia os dados aleatórios
+    SetConsoleOutputCP(CP_UTF8); // Força compatibilidade de caracteres (Emojis e bordas)
 
+    // Esconde o cursor nativo branco piscante do DOS Console
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_CURSOR_INFO cursorInfo;
     GetConsoleCursorInfo(out, &cursorInfo);
     cursorInfo.bVisible = false; SetConsoleCursorInfo(out, &cursorInfo);
 
+    // Sistema Base de Gestão de Menus
     while (true) {
         int op = menuPrincipal();
         
@@ -1195,7 +1250,7 @@ int main() {
                 int escolha = telaGameOver(estado);
                 if (escolha == 1) { resetarEstadoPartida(); tempoInicio = time(0); continue; }
                 if (escolha == 2) { resetarPartidaCompleta(); dificuldade = telaSelecionarDificuldade(); tempoInicio = time(0); continue; }
-                break;
+                break; // Escolha 3 (Voltar ao menu) entra no break base
             }
         }
         else if (op == 3) { 
